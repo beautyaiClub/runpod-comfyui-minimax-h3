@@ -1,10 +1,10 @@
 # RunPod GitHub build Dockerfile.
 #
-# The base is the previous successful RunPod-internal build of this repository,
-# not Docker Hub. Reusing it avoids spending the builder timeout reinstalling
-# Ubuntu/CUDA/PyTorch/ComfyUI; this build only adds the model layer and refreshes
-# the handler/workflows/entrypoint from the current GitHub commit.
-FROM registry.runpod.net/beautyaiclub-runpod-comfyui-minimax-h3-main-runpod-dockerfile:b71517eaa
+# Reuse the already-built 13.8GB code/runtime layer. The final image produced
+# by this GitHub build is stored in RunPod's internal registry; we do not push
+# the new model image to Docker Hub. Reusing this layer avoids spending the
+# builder timeout reinstalling Ubuntu/CUDA/PyTorch/ComfyUI.
+FROM codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0
 
 ARG BAKE_MODELS=true
 

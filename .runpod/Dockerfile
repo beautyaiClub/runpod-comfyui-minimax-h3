@@ -259,9 +259,10 @@ RUN set -eux; \
       "BAKE_MODELS=${BAKE_MODELS}" \
       > /opt/comfyui-baked/.runpod-bundle-version
 
-# Download the model files into the builder output. Each file is downloaded
-# into a resumable .part path and renamed only after curl succeeds, so a failed
-# large-file transfer cannot be mistaken for a complete model.
+# Download the model files into the builder output. Hugging Face files use
+# the installed `hf` client with Xet disabled; direct curl against a resolve URL
+# can return a tiny access/error document from a builder network instead of the
+# LFS object. Every file is staged and renamed only after it exists.
 RUN set -eux; \
     if [ "$BAKE_MODELS" = "true" ]; then \
       while IFS="$(printf '\t')" read -r sub name url; do \
@@ -269,11 +270,30 @@ RUN set -eux; \
         dest="/opt/comfyui-baked/models/$sub/$name"; \
         mkdir -p "$(dirname "$dest")"; \
         echo "bake-model: $name"; \
-        if [ -f "$dest.part" ]; then \
-          curl -fL --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$dest.part" "$url"; \
-        else \
-          curl -fL --retry 5 --retry-all-errors --retry-delay 5 -o "$dest.part" "$url"; \
-        fi; \
+        case "$url" in \
+          https://huggingface.co/*/resolve/*) \
+            hf_ref="${url#https://huggingface.co/}"; \
+            repo_id="${hf_ref%%/resolve/*}"; \
+            hf_ref="${hf_ref#*/resolve/}"; \
+            revision="${hf_ref%%/*}"; \
+            repo_path="${hf_ref#*/}"; \
+            tmp_dir="/tmp/hf-model"; \
+            rm -rf "$tmp_dir"; \
+            mkdir -p "$tmp_dir"; \
+            HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER=1 \
+              hf download "$repo_id" "$repo_path" --revision "$revision" --local-dir "$tmp_dir"; \
+            test -s "$tmp_dir/$repo_path"; \
+            mv -f "$tmp_dir/$repo_path" "$dest.part"; \
+            rm -rf "$tmp_dir"; \
+            ;; \
+          *) \
+            if [ -f "$dest.part" ]; then \
+              curl -fL --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$dest.part" "$url"; \
+            else \
+              curl -fL --retry 5 --retry-all-errors --retry-delay 5 -o "$dest.part" "$url"; \
+            fi; \
+            ;; \
+        esac; \
         test -s "$dest.part"; \
         mv -f "$dest.part" "$dest"; \
         stat -c 'bake-model: %n %s bytes' "$dest"; \

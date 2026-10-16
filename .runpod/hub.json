@@ -1,6 +1,6 @@
 {
   "title": "MiniMax H3 — Video + Audio",
-  "description": "MiniMax H3 on ComfyUI (CUDA 13): text / image / first-last-frame / reference-to-video with audio. Two template sets — native (core nodes + URL loaders) and enhancers (prompt enhancer, RIFE interpolation, TensorRT upscaling). Models download to the network volume on first boot.",
+  "description": "MiniMax H3 on ComfyUI (CUDA 13): text / image / first-last-frame / reference-to-video with audio. The RunPod Dockerfile bakes the complete H3 model set into the image; no model volume is required.",
   "type": "serverless",
   "category": "video",
   "config": {
@@ -20,28 +20,6 @@
           "description": "native（原生）或 enhancers（增强）",
           "default": "native",
           "advanced": true
-        }
-      },
-      {
-        "key": "WORKFLOW_SEED",
-        "input": {
-          "type": "boolean",
-          "name": "开机写入模板到网络卷",
-          "description": "首次开机把镜像内的模板复制到 /runpod-volume/workflows",
-          "default": true,
-          "trueValue": "true",
-          "falseValue": "false"
-        }
-      },
-      {
-        "key": "VOLUME_AUTOPOPULATE",
-        "input": {
-          "type": "boolean",
-          "name": "开机自动下载模型",
-          "description": "按 models-manifest.txt 下载到网络卷（约 100GB；建议先用 CPU pod 预灌，然后保持关闭）",
-          "default": false,
-          "trueValue": "true",
-          "falseValue": "false"
         }
       },
       {

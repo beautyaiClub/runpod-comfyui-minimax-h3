@@ -1,21 +1,35 @@
 #!/bin/bash
-# Serverless worker entrypoint: materialize baked ComfyUI, point it at the
-# network volume for models, then hand off to the runpod handler.
+# Serverless worker entrypoint. The production image contains the H3 models,
+# so a model volume is optional and no first-boot model download is required.
 set -e
 
-COMFYUI_DIR="/workspace/runpod-slim/ComfyUI"
 BAKED="/opt/comfyui-baked"
-VENV_DIR="$COMFYUI_DIR/.venv-${VENV_SUFFIX:-cu130}"
+WORKSPACE_COMFYUI="/workspace/runpod-slim/ComfyUI"
 
-if [ ! -f "$COMFYUI_DIR/main.py" ]; then
-    echo "Materializing baked ComfyUI into workspace..."
-    mkdir -p "$COMFYUI_DIR"
-    cp -a "$BAKED/." "$COMFYUI_DIR/"
+# Avoid copying 77GB of baked weights into the writable container layer. When
+# the image was built with BAKE_MODELS=true, run ComfyUI directly from the
+# read-only image tree; ComfyUI writes transient output/cache files there as
+# root. Keep the old materialisation path for code-only/dev images and legacy
+# volume deployments.
+baked_model="$(find "$BAKED/models" -type f -print -quit 2>/dev/null || true)"
+if [ "${BAKED_MODELS:-false}" = "true" ] && [ -n "$baked_model" ]; then
+    COMFYUI_DIR="$BAKED"
+    echo "entrypoint: using baked models from $COMFYUI_DIR"
+else
+    COMFYUI_DIR="$WORKSPACE_COMFYUI"
+    if [ ! -f "$COMFYUI_DIR/main.py" ]; then
+        echo "entrypoint: materializing code-only ComfyUI into $COMFYUI_DIR"
+        mkdir -p "$COMFYUI_DIR"
+        cp -a "$BAKED/." "$COMFYUI_DIR/"
+    fi
 fi
+export COMFYUI_DIR
 
-# Models live on the RunPod network volume — populated once by
-# populate-gguf-volume.sh, shared across every serverless worker.
-cat > "$COMFYUI_DIR/extra_model_paths.yaml" << 'YAML'
+# A mounted model volume is an optional compatibility override. It is used
+# when present, but the normal image-only deployment does not create or require
+# /runpod-volume.
+if [ -d /runpod-volume/models ]; then
+    cat > "$COMFYUI_DIR/extra_model_paths.yaml" << 'YAML'
 runpod_volume:
   base_path: /runpod-volume/models
   checkpoints: checkpoints
@@ -34,30 +48,30 @@ runpod_volume:
   sams: sams
   upscale_models: upscale_models
 YAML
-
-# sam_vit_b_01ec64.pth is a legacy-tar checkpoint — PyTorch >= 2.6 defaults
-# torch.load to weights_only=True which rejects it. Impact Pack's SAMLoader
-# calls segment_anything.build_sam → torch.load(f) with no override, so patch
-# the lib in place (baked /opt copy and venv both covered by the find roots).
-find /usr /opt -name build_sam.py -exec sed -i 's|torch\.load(f)|torch.load(f, weights_only=False)|' {} +
-
-# A truncated download of sam_vit_b (the official Meta CDN copy) can end up on
-# the volume, and populate would then skip it as "present". Check the exact byte
-# size of the official checkpoint and force a re-download on mismatch.
-[ "$(stat -c%s /runpod-volume/models/sams/sam_vit_b_01ec64.pth 2>/dev/null)" != "375042383" ] && rm -f /runpod-volume/models/sams/sam_vit_b_01ec64.pth
-
-# Auto-populate the network volume on first boot (models-manifest.txt).
-# Concurrent cold workers serialize on a flock inside populate-volume.sh;
-# disable with VOLUME_AUTOPOPULATE=false.
-if [ "${VOLUME_AUTOPOPULATE:-true}" = "true" ]; then
-    /opt/serverless/populate-volume.sh || echo "entrypoint: volume populate failed — jobs may error on missing models" >&2
+    echo "entrypoint: optional model volume detected at /runpod-volume/models"
+else
+    rm -f "$COMFYUI_DIR/extra_model_paths.yaml"
 fi
 
-# Workflow templates live on the network volume so a new template (or an edit to
-# an existing one) is a file copy plus a worker restart, not a fresh image build.
-# Each set directory is seeded from the baked defaults the first time it is
-# missing and never touched again — delete files to remove them for good.
-# Disable with WORKFLOW_SEED=false when you manage the volume yourself.
+# sam_vit_b_01ec64.pth is a legacy-tar checkpoint — PyTorch >= 2.6 defaults
+# torch.load to weights_only=True, which rejects it. Impact Pack's SAMLoader
+# calls segment_anything.build_sam → torch.load(f) with no override, so patch
+# the library in place (baked /opt copy and venv both covered by the roots).
+find /usr /opt -name build_sam.py -exec sed -i 's|torch\.load(f)|torch.load(f, weights_only=False)|' {} +
+
+# A truncated legacy volume copy must not shadow the valid baked checkpoint.
+if [ -d /runpod-volume/models ]; then
+    [ "$(stat -c%s /runpod-volume/models/sams/sam_vit_b_01ec64.pth 2>/dev/null)" = "375042383" ] || rm -f /runpod-volume/models/sams/sam_vit_b_01ec64.pth
+fi
+
+# Kept only for legacy volume deployments. With the baked image this is a
+# no-op because /runpod-volume is not mounted and defaults to false.
+if [ -d /runpod-volume ] && [ "${VOLUME_AUTOPOPULATE:-false}" = "true" ]; then
+    /opt/serverless/populate-volume.sh || echo "entrypoint: volume populate failed — baked jobs may still run" >&2
+fi
+
+# Templates are baked into /opt/workflows. If a legacy volume is mounted, keep
+# the existing editable-volume behaviour; otherwise handler uses the baked set.
 VOLUME_WORKFLOWS="/runpod-volume/workflows"
 if [ -d /runpod-volume ]; then
     if [ "${WORKFLOW_SEED:-true}" = "true" ]; then
@@ -76,17 +90,15 @@ if [ -d /runpod-volume ]; then
     echo "entrypoint: WORKFLOWS_DIR=$WORKFLOWS_DIR (template sets: $(ls -1 "$VOLUME_WORKFLOWS" 2>/dev/null | tr '\n' ' '))"
 fi
 
-# TensorRT engines: the *-TensorRT-Auto nodes compile engines lazily on first
-# use under models/tensorrt/ — which lives on ephemeral container disk, so
-# every cold worker would rebuild them (minutes). Redirect to the network
-# volume so the build happens once ever. Caveat: engines are arch-specific —
-# safe because the endpoint is pinned to one GPU pool (BLACKWELL_96).
-if [ -d /runpod-volume ]; then
+# TensorRT engines are optional runtime artefacts. A mounted volume can still
+# share them between workers; without a volume they are compiled locally under
+# the baked ComfyUI models directory.
+if [ -d /runpod-volume/models ]; then
     mkdir -p /runpod-volume/models/tensorrt "$COMFYUI_DIR/models"
     dest="$COMFYUI_DIR/models/tensorrt"
     [ -d "$dest" ] && [ ! -L "$dest" ] && rm -rf "$dest"
     ln -sfn /runpod-volume/models/tensorrt "$dest"
 fi
 
-export PATH="$VENV_DIR/bin:$PATH"
+export PATH="${COMFYUI_DIR}/.venv-${VENV_SUFFIX:-cu130}/bin:$PATH"
 exec python3 /opt/serverless/handler.py

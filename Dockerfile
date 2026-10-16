@@ -21,12 +21,16 @@
 #   /opt/workflows/enhancers  the enhancement templates — need the
 #                             enhancement chain
 #
-# Both sets are copied onto the network volume (untouched afterwards) by the
-# entrypoint, so templates can be edited without rebuilding the image.
+# Both template sets and the H3 model manifest are baked into the image by
+# default. The RunPod GitHub builder produces the final image directly, so the
+# worker does not need a model volume or a first-boot model download.
 #
 # WITH_H3_ENHANCERS=true (default) installs the enhancement chain so the
 # `enhancers` set runs. Build with --build-arg WITH_H3_ENHANCERS=false for a
 # smaller image that only serves the `native` set.
+#
+# BAKE_MODELS=true (default) downloads every model in models-manifest.txt during
+# the image build. Set it to false only for a code-only development image.
 
 # ============================================================================
 # Stage 1: Builder - ComfyUI, node packs and the Python dependency lock
@@ -47,6 +51,7 @@ ARG BEAUTYAI_SHA=1788e238b069e1fb56524a17f49f45916f9e0fdb
 # Enhancement chain for the `enhancers` template set (see the header). Every
 # pack is pinned to a commit so a rebuild resolves to the same code.
 ARG WITH_H3_ENHANCERS=true
+ARG BAKE_MODELS=true
 ARG RIFE_TRT_SHA=46d7a504457e5583f7be9b6535bd2375c8f5c7af
 ARG UPSCALER_TRT_SHA=f428364befb14848c7b6efe357f4b4ff0904009c
 ARG PIXAROMA_SHA=63538e7214cc1a72241def48b4a5939d7ed7fd87
@@ -93,6 +98,7 @@ ENV TORCH_VERSION=${TORCH_VERSION} \
     TORCHAUDIO_VERSION=${TORCHAUDIO_VERSION}
 
 WORKDIR /tmp/build
+COPY models-manifest.txt /tmp/build/models-manifest.txt
 RUN curl -fSL "https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/${COMFYUI_VERSION}.tar.gz" -o comfyui.tar.gz && \
     mkdir -p ComfyUI && \
     tar xzf comfyui.tar.gz --strip-components=1 -C ComfyUI && \
@@ -243,7 +249,33 @@ RUN set -eux; \
       "TENSORRT_CU13=${TRT_CU13_VERSION}" \
       "TEMPLATE_SETS=native,enhancers" \
       "H3_WORKER=runpod-comfyui-minimax-h3" \
+      "BAKE_MODELS=${BAKE_MODELS}" \
       > /opt/comfyui-baked/.runpod-bundle-version
+
+# Download the model files into the builder output. Each file is downloaded
+# into a resumable .part path and renamed only after curl succeeds, so a failed
+# large-file transfer cannot be mistaken for a complete model.
+RUN set -eux; \
+    if [ "$BAKE_MODELS" = "true" ]; then \
+      while IFS="$(printf '\t')" read -r sub name url; do \
+        case "$sub" in ''|\#*) continue ;; esac; \
+        dest="/opt/comfyui-baked/models/$sub/$name"; \
+        mkdir -p "$(dirname "$dest")"; \
+        echo "bake-model: $name"; \
+        if [ -f "$dest.part" ]; then \
+          curl -fL --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$dest.part" "$url"; \
+        else \
+          curl -fL --retry 5 --retry-all-errors --retry-delay 5 -o "$dest.part" "$url"; \
+        fi; \
+        test -s "$dest.part"; \
+        mv -f "$dest.part" "$dest"; \
+        stat -c 'bake-model: %n %s bytes' "$dest"; \
+      done < /tmp/build/models-manifest.txt; \
+      test "$(find /opt/comfyui-baked/models -type f | wc -l)" -eq 14; \
+      du -sh /opt/comfyui-baked/models; \
+    else \
+      echo 'bake-model: disabled'; \
+    fi
 
 COPY scripts/prebake-manager-cache.py /tmp/prebake-manager-cache.py
 RUN python3.12 /tmp/prebake-manager-cache.py /opt/comfyui-baked/user/__manager/cache
@@ -280,6 +312,7 @@ ARG CUDA_VERSION_DASH=13-0
 ARG TORCH_VERSION=2.10.0+cu130
 ARG TORCHVISION_VERSION=0.25.0+cu130
 ARG TORCHAUDIO_VERSION=2.10.0+cu130
+ARG BAKE_MODELS=true
 ARG FILEBROWSER_VERSION=v2.63.23
 ARG FILEBROWSER_SHA256=b14db2bb8033caa3f80205eb6578b2ed0744ebd9e716b790bc4a9703ce909e88
 
@@ -319,6 +352,8 @@ ENV PATH=/usr/local/cuda/bin:${PATH} \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=all \
     HF_TOKEN="" \
+    BAKED_MODELS=${BAKE_MODELS} \
+    VOLUME_AUTOPOPULATE=false \
     COMFYUI_DIR=/opt/comfyui-baked \
     WORKFLOWS_DIR=/opt/workflows \
     H3_TEMPLATE_SET=native \

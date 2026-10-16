@@ -2,16 +2,17 @@
   "tests": [
     {
       "name": "health_check",
-      "input": { "action": "health" },
+      "input": {
+        "action": "health"
+      },
       "timeout": 300000
     }
   ],
   "config": {
     "gpuTypeId": "NVIDIA A100-SXM4-80GB",
     "gpuCount": 1,
-    "env": [
-      { "key": "VOLUME_AUTOPOPULATE", "value": "false" }
-    ],
-    "allowedCudaVersions": ["13.0"]
+    "allowedCudaVersions": [
+      "13.0"
+    ]
   }
 }

@@ -2,7 +2,8 @@
 
 把 ComfyUI + MiniMax H3（FL2VA / Ref2VA，带音频）打包成 RunPod Serverless 端点：
 每个 worker 启动一次 ComfyUI，handler 按 job 取模板、填参数、注入素材、投递到本地
-ComfyUI，再把产物回传。模型放在网络卷上，镜像里只有运行时和节点。
+ComfyUI，再把产物回传。模型在 RunPod 构建阶段直接打包进镜像，生产端点不需要
+Global Volume、Network Volume，也不需要 worker 首次启动时下载模型。
 
 镜像基座：`ubuntu:24.04` + CUDA 13.0 + `torch==2.10.0+cu130`，ComfyUI 固定
 `v0.40.0`（都在 Dockerfile 顶部的 ARG 里，改一处即可）。
@@ -13,8 +14,8 @@ ComfyUI，再把产物回传。模型放在网络卷上，镜像里只有运行�
 | --- | --- |
 | `Dockerfile` | 两阶段构建：builder 装 ComfyUI + 节点 + Python 依赖，runtime 只带运行时 |
 | `handler.py` | RunPod handler：模板选择、参数注入、素材注入、widget 校正、产物回传 |
-| `serverless-entrypoint.sh` | 开机流程：材料化 ComfyUI、写 `extra_model_paths.yaml`、seed 模板、下载模型 |
-| `populate-volume.sh` + `models-manifest.txt` | 网络卷模型清单与幂等下载（并发 worker 用 flock 串行） |
+| `serverless-entrypoint.sh` | 开机流程：选择镜像内模型、兼容旧卷挂载、启动 handler |
+| `populate-volume.sh` + `models-manifest.txt` | 模型清单；Dockerfile 构建时按清单下载，脚本仅保留给旧卷部署 |
 | `workflows-api/native/` | 原生模板集（核心节点 + 三个 URL loader） |
 | `workflows-api/enhancers/` | 增强模板集（提示词增强、RIFE 插帧、TensorRT 超分、face detailer、wildcard） |
 | `custom_nodes/h3_url_loaders/` | 自带的两个 URL loader（从上游 vendor，见该目录 README） |
@@ -24,12 +25,13 @@ ComfyUI，再把产物回传。模型放在网络卷上，镜像里只有运行�
 ## 构建
 
 ```bash
-# 默认：两套模板都能跑（含增强层，本地 13.8GB）
-wslc build --progress plain --tag codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0 .
+# RunPod GitHub builder 使用的同一套 Dockerfile；模型会在构建阶段下载并进入镜像。
+# 本地执行会下载约 77.6GB 模型，仅用于需要本地复现时。
+wslc build --progress plain --build-arg BAKE_MODELS=true .
 
-# 只要原生模板集：不装增强层，镜像 8.83GB
-wslc build --progress plain --build-arg WITH_H3_ENHANCERS=false \
-  --tag codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0-lean .
+# 代码自检镜像（不下载模型，不用于生产部署）
+wslc build --progress plain --build-arg BAKE_MODELS=false \
+  --tag runpod-comfyui-minimax-h3:code-only .
 ```
 
 常用构建参数（都在 Dockerfile 顶部）：
@@ -38,6 +40,7 @@ wslc build --progress plain --build-arg WITH_H3_ENHANCERS=false \
 | --- | --- | --- |
 | `COMFYUI_VERSION` | `v0.40.0` | ComfyUI tag |
 | `WITH_H3_ENHANCERS` | `true` | 是否装增强层（TensorRT / Impact / Easy-Use / Pixaroma / QwenVL / TagForge / PerfectVideoResolution） |
+| `BAKE_MODELS` | `true` | 是否在 RunPod 构建阶段把 `models-manifest.txt` 中的模型下载到镜像 |
 | `TORCH_VERSION` / `TORCHVISION_VERSION` / `TORCHAUDIO_VERSION` | `2.10.0+cu130` / `0.25.0+cu130` / `2.10.0+cu130` | CUDA 13 的 PyTorch |
 | `CUDA_VERSION_DASH` / `TORCH_INDEX_SUFFIX` | `13-0` / `cu130` | CUDA 工具链与 PyTorch 源 |
 | `TRT_CU13_VERSION` | `10.15.1.29` | TensorRT 版本，需与卷里预编译引擎一致 |
@@ -47,21 +50,21 @@ wheel 全下下来算哈希，几十 GB）；装完校验 torch 版本，再装�
 
 ## 部署
 
-1. 网络卷 ≥160GB（模型约 100GB），挂到 `/runpod-volume`
-2. 容器盘：`hub.json` 里声明 30GB（13.8GB 镜像 + 运行期临时文件够用）
-3. GPU：`BLACKWELL_96`，单卡（32B 文本编码器 + 视频 DiT + TensorRT 引擎吃显存）
-4. 首次开机自动下载缺失模型到卷上（`VOLUME_AUTOPOPULATE=false` 可关闭）；模板也会
-   在首次开机时 seed 到卷上
+1. RunPod Endpoint 关联本仓库的 GitHub 构建，Dockerfile 使用 `/.runpod/Dockerfile`。
+2. RunPod builder 在构建阶段下载 `models-manifest.txt` 中的模型并保存构建产物，生产 worker 不再下载模型。
+3. 不挂 Global Volume 或 Network Volume；容器盘保留 30GB 作为运行期临时空间即可，模型位于镜像层。
+4. GPU：允许 `AMPERE_80` 和 `BLACKWELL_96`，单卡；两档均需通过实际任务验证。
+5. `workers.max=0` 时没有任务 worker，不产生 GPU worker 运行费用；镜像构建和缓存由 RunPod 管理。
 
 ## 两套模板
 
-模板不烧死在镜像里：首次开机 entrypoint 会把镜像内的两套复制到卷上，之后**不再覆盖**，
-所以改模板 / 加模板只要换文件 + 重启 worker。
+两套模板都直接放在镜像内。生产 worker 默认读取 `/opt/workflows`，不需要卷。
+修改模板后提交 GitHub 并触发 RunPod 重建即可。
 
 ```
-/runpod-volume/workflows/native/MiniMaxH3-Native-FL2VA.json     t2va / i2va / fl2va
-/runpod-volume/workflows/native/MiniMaxH3-Native-Ref2VA.json    ref2va
-/runpod-volume/workflows/enhancers/*.json                       5 个增强模板
+/opt/workflows/native/MiniMaxH3-Native-FL2VA.json     t2va / i2va / fl2va
+/opt/workflows/native/MiniMaxH3-Native-Ref2VA.json    ref2va
+/opt/workflows/enhancers/*.json                       5 个增强模板
 ```
 
 选哪套由参数决定：
@@ -70,7 +73,6 @@ wheel 全下下来算哈希，几十 GB）；装完校验 torch 版本，再装�
 | --- | --- | --- |
 | `template_set` | job input | 取端点环境变量 |
 | `H3_TEMPLATE_SET` | 端点环境变量 | `native` |
-| `WORKFLOW_SEED` | 端点环境变量 | `true`（`false` 表示卷上模板你自己管） |
 
 原生模板的槽位按 job 顺序填，填不满的槽位连同连线一起剪掉，所以同一个模板覆盖
 t2va（不给图）/ i2va（1 张图）/ fl2va（首尾两帧），ref2va 模板最多 9 图 + 3 视频 +
@@ -118,8 +120,8 @@ t2va（不给图）/ i2va（1 张图）/ fl2va（首尾两帧），ref2va 模板
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
 | `H3_TEMPLATE_SET` | `native` | 默认模板集 |
-| `WORKFLOW_SEED` | `true` | 首次开机是否把镜像内模板 seed 到卷上 |
-| `VOLUME_AUTOPOPULATE` | `true` | 首次开机是否按 `models-manifest.txt` 下载模型 |
+| `BAKED_MODELS` | `true` | 是否优先使用镜像内模型 |
+| `VOLUME_AUTOPOPULATE` | `false` | 仅旧卷兼容模式下是否下载缺失模型 |
 | `HF_TOKEN` | 空 | 从 Hugging Face 拉 gated 仓库时需要 |
 | `JOB_TIMEOUT_S` | `1800` | 单任务超时（秒） |
 | `COMFYUI_EXTRA_ARGS` | 空 | 传给 ComfyUI 的额外启动参数 |
@@ -131,14 +133,13 @@ t2va（不给图）/ i2va（1 张图）/ fl2va（首尾两帧），ref2va 模板
 
 ## 模型
 
-模型全部在卷上（`/runpod-volume/models`），镜像里只有空目录。清单格式是
-`<子目录><TAB><文件名><TAB><下载地址>`，`populate-volume.sh` 逐条幂等下载，
-Hugging Face 的地址优先走 `hf download`，其余走 `wget --continue`。
+模型清单是 `models-manifest.txt`。RunPod 构建 `/.runpod/Dockerfile` 时，Dockerfile
+逐条下载清单中的 14 个文件到 `/opt/comfyui-baked/models`，下载完成后再复制到最终镜像。
+当前模型集合约 77.6GB，连同 ComfyUI、CUDA 和节点后最终镜像预计约 90～95GB。
 
-当前清单包含：Comfy-Org 的 H3 INT8 权重与 VAE、Singularity ref2va int8、
-Qwen3-VL 32B NVFP4 文本编码器、lightx2v turbo LoRA、风格 LoRA、face detailer 用的
-bbox / sam 权重，以及两个预编译的 TensorRT 引擎。ComfyUI 的模型目录通过
-`extra_model_paths.yaml` 指到卷上，TensorRT 引擎目录是软链（构建一次、所有 worker 复用）。
+清单包含：Comfy-Org 的 H3 INT8 权重与 VAE、Singularity ref2va int8、Qwen3-VL 32B
+NVFP4 文本编码器、lightx2v turbo LoRA、风格 LoRA、face detailer 用的 bbox / sam 权重。
+生产环境不需要单独创建模型卷。`populate-volume.sh` 仅保留给旧的卷挂载部署，不参与默认镜像构建后的启动流程。
 
 ## 节点来源
 
@@ -160,7 +161,8 @@ bbox / sam 权重，以及两个预编译的 TensorRT 引擎。ComfyUI 的模型
 不需要 GPU、不需要模型卷：
 
 ```bash
-IMG=codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0
+# IMG 指向 RunPod 构建完成后的内部镜像；本地代码自检也可使用本地 tag。
+IMG=<runpod-built-image>
 
 # 1) 原生图要用的 19 个节点是否都在 + 三个 loader 的 schema 是否与参考实例一致
 wslc run --rm --entrypoint /usr/bin/python3 $IMG /opt/serverless/verify-native-h3.py --boot
@@ -179,9 +181,8 @@ wslc run --rm --entrypoint /usr/bin/python3 $IMG /opt/serverless/test-handler-te
 
 ## 已知限制
 
-- 增强集的 RIFE / 超分节点用的是上游版本，它们认的模型名与卷里预编译引擎不一致，
-  所以那两个节点首次运行会各自编译引擎（几分钟，一次）；想直接复用预编译引擎需要
-  换成产出这些引擎的节点版本。
+- 增强集的 RIFE / 超分节点首次运行会按当前 GPU 架构编译 TensorRT 引擎，可能需要几分钟；
+  引擎不打包进镜像，也不跨 GPU 架构复用。
 - 模板导出时的 widget 会随节点版本漂移（例如 `crf` 被挪进 format 控件、`2K` vs `2k`）。
   handler 在投递前按运行中服务器的 schema 校正：只差大小写的值做归一，节点不认识的
   widget 丢弃走默认值，改动明细放在响应的 `widget_repairs` 里。

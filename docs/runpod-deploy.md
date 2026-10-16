@@ -1,162 +1,126 @@
 # RunPod 部署备忘
 
-## 当前资源
+## 部署方式
 
-| 资源 | id | 关键配置 |
-| --- | --- | --- |
-| 端点 | `3w2llhe9btnsmn` | `myreels-minimax-h3`，**GitHub 集成**（repo `beautyaiClub/runpod-comfyui-minimax-h3`、branch `main`、`dockerFilePath = /.runpod/Dockerfile`），workers `{min:0,max:1,idleTimeout:5}`，executionTimeout 60min，CUDA ≥13.0 |
-| 模板 | `jx2vv4datz`（REST 建）/ `jk9p6dnxf8`（GitHub 集成用） | 镜像 `codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0`，容器盘 30GB，serverless |
-| 网络卷 | `icf8p97vyb` | 160GB，`US-MD-1`（卷与机房绑定，端点只能在该机房起 worker） |
-| GPU 池 | — | `AMPERE_80`（A100 80GB，$2.72/h）+ `BLACKWELL_96`（RTX PRO 6000 96GB，$3.49/h）——两档都实测跑通 H3 |
-| 已删除 | ~~`q76qt1gteue38g`~~ | 早期用 REST 建的端点（控制台里没有 GitHub 图标那一个），2026-10-16 删掉 |
+本项目使用 RunPod 的 GitHub 集成构建，不依赖 Docker Hub：
 
-模板环境变量：`H3_TEMPLATE_SET=native`、`WORKFLOW_SEED=true`、`VOLUME_AUTOPOPULATE=false`、`JOB_TIMEOUT_S=1800`。
+| 配置 | 值 |
+| --- | --- |
+| GitHub 仓库 | `beautyaiClub/runpod-comfyui-minimax-h3` |
+| 分支 | `main` |
+| Dockerfile | `/.runpod/Dockerfile` |
+| 构建方式 | RunPod builder 在 Dockerfile 构建阶段下载并打包模型 |
+| 模型卷 | 不需要 Global Volume 或 Network Volume |
+| 模型清单 | `models-manifest.txt`，14 个文件，约 77.6GB |
+| 运行镜像 | RunPod 内部构建产物，不推送 Docker Hub |
 
-## 费用与「内存」问题
+`.runpod/Dockerfile` 是完整 Dockerfile，不是 `FROM codoive/...` 的镜像包装层。
+它使用 `ubuntu:24.04`、CUDA 13.0、ComfyUI v0.40.0 和 CUDA 13.0 PyTorch，
+并在 `BAKE_MODELS=true` 时把模型下载到 `/opt/comfyui-baked/models`。
 
-官方口径（`https://docs.runpod.io/serverless/pricing`）：**从 worker 启动到彻底停止，按秒计费**，
-计费区间 = 冷启动（模型加载）+ 执行（execution）+ 空闲等待（idleTimeout，默认 5s）；镜像拉取和
-scaled-down 状态不计费。控制台里显示 **Idle = 已缩容 = 不计费**。存储另计：
+## 构建流程
 
-```
-容器盘   30GB × ~$0.10/GB/月 = $3/月
-网络卷  160GB ×  $0.07/GB/月 = $11.20/月（<1TB 档）
-```
+1. 将 Dockerfile 和代码提交到 GitHub `main`。
+2. RunPod GitHub builder 检测新的 commit。
+3. Builder 安装 ComfyUI、节点和 Python 依赖。
+4. Builder 按 `models-manifest.txt` 下载 14 个模型文件。
+5. RunPod 保存构建产物，Endpoint 使用该内部镜像。
+6. Worker 启动时直接从镜像读取模型，不执行模型下载。
 
-**关于「内存」**：显存（80GB / 96GB / 180GB…）是卡型的属性，选定卡型后**改不了、也不单独计价**，
-"把内存调小省钱"不存在——价格档位就是按卡型定的。能动的只有四件事：① 允许的卡型池
-（已砍到最便宜且实测能跑的两档）；② 容器盘大小；③ 网络卷大小；④ 空闲 worker
-（`workers.min=0`，不用时把 `workers.max` 设 0 就是完全停）。账号里那个「180G」是 B200 的显存，
-B200/B300/H200/H100 都已从池子里移除。
+模型构建失败时，不要把不完整的 `.part` 文件当成完成文件。Dockerfile 只在下载成功
+后才将 `.part` 重命名为最终文件。
 
-serverless 单价（`GET https://api.runpod.io/v2/catalog/gpus` 的 `price.serverless`，2026-10-16）：
+## Endpoint 目标配置
 
-| 卡型 | pool | serverless $/h | ¥/s（按 7 折算） |
-| --- | --- | --- | --- |
-| A100-SXM4-80GB | `AMPERE_80` | 2.72 | 0.005294 |
-| RTX PRO 6000 Blackwell 96GB | `BLACKWELL_96` | 3.49 | 0.006794 |
+- `workers.min = 0`
+- `workers.max = 1`
+- `idleTimeout = 5`
+- `executionTimeout = 3600s`
+- GPU 池：`AMPERE_80`、`BLACKWELL_96`
+- CUDA：`13.0`
+- 容器盘：30GB 运行期临时空间
+- 不配置 `networkVolumeIds`
+- 不配置 `volumes`
 
-实测一次生成（2026-10-16，A100 80GB / US-MD-1，5s / native / FL2VA）：
+模型已经在镜像层内，不能再让启动脚本把 77GB 模型复制到 `/workspace`，否则会产生一次
+不必要的冷启动复制。`serverless-entrypoint.sh` 检测到 `BAKED_MODELS=true` 后直接使用
+`/opt/comfyui-baked`；只有代码自检镜像或旧卷部署才会走复制兼容路径。
 
-| 场景 | 启动等待 delayTime | 执行 executionTime | 合计 | 真实成本 |
-| --- | --- | --- | --- | --- |
-| worker 已热 | 17.0s | 144.7s | 161.7s | ¥0.86（$0.123） |
-| 冷启动 | 100.0s | 131.4s | 231.4s | ¥1.23（$0.176） |
+## 成本口径
 
-对账方法：`GET https://rest.runpod.io/v1/billing/endpoints` 会返回每个端点的
-`amount` / `timeBilledMs`（A100 实测 `$0.0486 / 63.864s` ≈ `$0.000761/s`，即 $2.74/h，与官方价一致），
-把 `Σ(delayTime + executionTime)` 和它比一下就知道有没有算漏。冷启动那次 delay 100s 说明
-**worker 启动是计费的**（拉镜像不计），所以池子里别放"边跑边下模型"的配置。
+- 没有 Global Volume 的固定存储费。
+- 没有 Network Volume 的固定存储费。
+- RunPod 构建产物和缓存由 RunPod 管理，不是 Docker Hub 存储。
+- Worker 从启动到停止按秒计费，包括冷启动、任务执行和 `idleTimeout` 等待时间。
+- `workers.max=0` 时没有 Worker 运行，不产生 GPU Worker 运行费用。
+- 大镜像会增加首次冷启动准备时间，但 RunPod 会在 scaled-down 阶段准备镜像，准备阶段不等于
+  Worker 正在执行任务。
 
-日常流程（`max=1` 时闲置会按秒计费，A100 约 $0.045/分钟）：
+## 两套模板
 
-```powershell
-pwsh scripts/runpod-endpoint.ps1 status     # 看 max / 当前 worker
-pwsh scripts/runpod-endpoint.ps1 activate   # 生成前：max=1
-pwsh scripts/runpod-endpoint.ps1 health     # 探活（会冷启动）
-pwsh scripts/runpod-endpoint.ps1 pause      # 生成后：max=0，0 worker = 0 费用
-```
-
-暂停期间 `/run` 会返回 `ENDPOINT_PAUSED`（409），这是预期行为；接了 Generator 要无人值守就保持
-`max=1`（页面上的任务才跑得通），代价只有"任务之间那几秒到几分钟"的空闲。
-注意 v2 的 `GET /v2/serverless/<id>/workers` 里那些 THROTTLED/IDLE 记录会残留十几分钟，
-但容器其实已经 `stop container … exit code 137` 了（worker 日志可证），不是活跃计费状态。
-
-## 卷上的内容
+模板直接放在镜像中：
 
 ```
-/runpod-volume/models/...            按 models-manifest.txt 下载的权重（约 100GB）
-/runpod-volume/workflows/native/     MiniMaxH3-Native-FL2VA.json / -Ref2VA.json
-/runpod-volume/workflows/enhancers/  5 个增强模板
+/opt/workflows/native/MiniMaxH3-Native-FL2VA.json
+/opt/workflows/native/MiniMaxH3-Native-Ref2VA.json
+/opt/workflows/enhancers/*.json
 ```
 
-`WORKFLOW_SEED=true` 只在目录不存在时从镜像复制一次，之后改模板只需换文件 + 重启 worker。
+通过 `template_set` 或端点默认环境变量 `H3_TEMPLATE_SET` 选择：
 
-## 灌模型：用便宜机器，别用 GPU worker
+- `native`：原生 FL2VA / Ref2VA，不启用增强节点；
+- `enhancers`：启用提示词增强、RIFE、TensorRT 超分和 face detailer。
 
-开机时 `VOLUME_AUTOPOPULATE=true` 会让 GPU worker 边跑边下 100GB（96GB 卡按小时计费，纯浪费）。
-正确做法是先用一台 CPU pod 把卷灌满（实测 6 分钟、约 $0.12/小时的机型，成本不到 2 分钱），
-再把 GPU worker 的 `VOLUME_AUTOPOPULATE` 设为 `false`，这样它开机只做 ComfyUI 材料化和模板 seed，1-2 分钟就能接活。
+修改模板需要提交 GitHub 并触发一次新的 RunPod 构建。旧的卷模板 seed 逻辑只为兼容旧卷保留，
+新的 image-only Endpoint 不需要它。
+
+## 模型
+
+`models-manifest.txt` 是唯一模型清单。Dockerfile 构建时将文件下载到：
+
+```
+/opt/comfyui-baked/models/
+```
+
+当前模型包括 H3 INT8 diffusion models、Singularity ref2va、Qwen3-VL NVFP4 text encoder、
+Turbo LoRA、风格 LoRA、face detector、SAM、VAE 和 QwenVL enhancer 的 GGUF 文件。
+TensorRT 引擎不打包，增强节点首次使用时在 Worker 本地编译；引擎与 GPU 架构相关，不能跨
+不同 GPU 池直接复用。
+
+## 探活和真实任务
 
 ```bash
-RUNPOD_API_KEY=$(cat .build/runpod-key.txt)
-
-# 1) 便宜的 CPU pod 跑 populate-volume.sh，跑完保持存活方便看日志
-curl -s -X POST https://rest.runpod.io/v1/pods \
-  -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'Content-Type: application/json' \
-  -d '{
-        "name": "h3-volume-populate",
-        "computeType": "CPU",
-        "vcpuCount": 4,
-        "imageName": "codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0",
-        "containerDiskInGb": 30,
-        "networkVolumeId": "icf8p97vyb",
-        "volumeMountPath": "/runpod-volume",
-        "dataCenterIds": ["US-MD-1"],
-        "dockerEntrypoint": ["/bin/bash", "-lc"],
-        "dockerStartCmd": ["/opt/serverless/populate-volume.sh; echo POPULATE_EXIT=$?; sleep 604800"]
-      }'
-
-# 2) 看进度（SSE），等出现 POPULATE_EXIT=0
-curl -s -N "https://api.runpod.io/v2/pods/<podId>/logs" \
-  -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'Accept: text/event-stream'
-
-# 3) 删掉 pod
-curl -s -X DELETE "https://rest.runpod.io/v1/pods/<podId>" -H "Authorization: Bearer $RUNPOD_API_KEY"
-```
-
-populate 幂等：已存在的文件跳过，HF 下载走临时目录再落盘，中断后重跑不会留半截文件。
-
-## 探活
-
-```bash
-curl -s -X POST "https://api.runpod.ai/v2/htopp3qrarr54p/runsync" \
-  -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'Content-Type: application/json' \
+curl -s -X POST "https://api.runpod.ai/v2/<endpointId>/runsync" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H 'Content-Type: application/json' \
   -d '{"input":{"action":"health"}}'
 ```
 
-期望：`{"status":"ok","volume_mounted":true,"workflow_sets":{"native":[...],"enhancers":[...]},"workflows_dir":"/runpod-volume/workflows"}`。
+健康检查应返回 `status=ok`，并显示 `/opt/workflows`。它不需要模型卷，也不执行模型下载。
 
-`/runsync` 会等 worker 起来（冷启动 + 排队），长任务用 `/run` + 轮询 `/status/<jobId>`。
-
-## 发真实任务
-
-```bash
-curl -s -X POST "https://api.runpod.ai/v2/htopp3qrarr54p/run" \
-  -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'Content-Type: application/json' \
-  -d '{
-        "input": {
-          "workflow": "MiniMaxH3-Native-Ref2VA.json",
-          "template_set": "native",
-          "prompt": "a woman walks through a neon alley, [DOLLY IN]",
-          "config": "native_turbo",
-          "seconds": 6,
-          "images": ["https://…/ref1.png", "https://…/ref2.png"],
-          "videos": ["https://…/ref.mp4"],
-          "audios": ["https://…/ref.mp3"]
-        }
-      }'
-```
-
-字段说明见仓库根 README 的「Job 输入」一节。产物小文件直接 base64 回传，超过
-`OUTPUT_INLINE_MAX_MB`（默认 10MB）且请求里带 `s3Config` 时走 S3 并返回预签名 URL。
+真实任务使用 `/run`，长任务轮询 `/status/<jobId>`。小文件由 handler 直接返回，大文件按请求
+中的 `s3Config` 走 S3 预签名 URL。
 
 ## 排障
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| worker 反复重启、日志只有平台行、没有容器输出 | 镜像里的 shell 脚本是 CRLF（`#!/bin/bash\r`）→ exec 失败。`.gitattributes` 已固定 LF，Dockerfile 里还有一次 `sed` 兜底 + shebang 断言 |
-| 任务一直 IN_QUEUE 且没有 worker | 该机房当前没有可用 GPU。查 `GET https://api.runpod.io/v2/serverless/<endpointId>/workers`，或用 `curl https://api.runpod.io/v2/catalog/gpus` 看全网余量；换机房需要重建卷（模型要重灌，用上面的 CPU pod 方法） |
-| worker 起来但任务不动 | 看 worker 日志 `GET https://api.runpod.io/v2/serverless/<endpointId>/workers/<workerId>/logs`（SSE）。若卡在 populate，说明卷是空的且 `VOLUME_AUTOPOPULATE=true` |
-| 冷启动很久 | 卷是空的（要下 100GB）→ 用 CPU pod 预灌；正常冷启动 1-2 分钟 |
+| Build 长时间不动 | 正在下载约 77.6GB 模型或解析 Python 依赖；看 RunPod builder 的 plain 日志，不要中断构建 |
+| Worker 反复重启 | 检查 Dockerfile 最后对 shell 脚本做的 CRLF 清理和 shebang 断言 |
+| Worker 启动很慢 | 首次需要准备约 90～95GB 的内部镜像；不要再在 entrypoint 中下载或复制模型 |
+| 任务找不到模型 | 检查镜像构建是否包含 14 个模型文件，以及 `BAKED_MODELS=true` 是否生效 |
+| 任务一直 IN_QUEUE | 当前 GPU 池没有容量；切换允许的 GPU 池，不要通过模型卷解决 |
+| 增强节点失败 | 检查 TensorRT 版本、GPU 架构和节点版本是否匹配；native 模板先单独验证 |
 
-## 成本参考
+## 回退方案
 
-- 一次性：本地构建镜像 + 推 Docker Hub（免费层）；模型下载用 CPU pod（$0.12/小时，实测 6 分钟，< $0.02）
-- 长期固定：网络卷 160GB = **$11.20/月** + 容器盘 30GB ≈ **$3/月**（容器盘只在 worker 存活时按 5 分钟粒度计）
-- 每次生成：`(delayTime + executionTime) × 卡型单价`，A100 80GB 实测
-  `5s / 480p / native` 冷启动 ¥1.23、热跑 ¥0.86；分辨率翻到 768p、时长翻倍会按采样步数近似线性增长
-- 空闲：`workers.max=1` 时任务之间的空档按秒计费（A100 $0.045/分钟），长时间没人用就 `pause`
+新镜像通过 `health`、native FL2VA 和 native Ref2VA 验证前，不删除原来的 Global Volume。
+验证成功后再按顺序执行：
+
+1. Endpoint 切换为新的 RunPod GitHub 构建产物；
+2. 清空 `volumes` 和 `networkVolumeIds`；
+3. 确认新 Worker 在没有卷的情况下完成健康检查和真实任务；
+4. 再删除旧 Global Volume，停止固定存储费用。
 
 ## 接入 MyReels（Generator + Gateway）
 
@@ -232,25 +196,13 @@ Generator 侧走一等公民链路：`TaskJobType.RUNPOD` → `workers/runpod/ru
 以上 2、3 两步要写 Generator 的 MySQL（`myreels-config` 只是快照，改了不会自动生效），
 需要对应的库访问权限或由你在管理端导入。
 
-## 发布到 Runpod Hub（像其它 serverless 那样挂 GitHub 项目）
+## GitHub Endpoint 与 RunPod Hub
 
-> 现状：**已经不用走 Hub 了**。这里记的是"上架 Hub"这条路；日常部署直接用 GitHub 集成端点
-> `3w2llhe9btnsmn` 就够了 —— 它在仓库里读 `/.runpod/Dockerfile`（薄壳 `FROM` 我们推到 Docker Hub
-> 的现成镜像），所以推送新的 commit 会触发重建，控制台里也会显示 GitHub 图标。
+生产部署不需要上架 Hub，也不需要 GitHub Release。私有 Endpoint 直接关联仓库的 `main` 分支，
+RunPod 根据 `/.runpod/Dockerfile` 构建内部镜像即可。
 
-Hub 的要求（本仓库已经全部满足）：
+`.runpod/hub.json` 和 `.runpod/tests.json` 只在以后选择上架 Hub 时使用；它们不是私有 GitHub
+Endpoint 的必要条件。即使上架 Hub，Hub 也应使用这份完整 Dockerfile，不需要 Docker Hub 镜像。
 
-1. 仓库里有 `handler.py`、`Dockerfile`、`README.md`（根目录或 `.runpod/` 下）
-2. `.runpod/` 下有 `hub.json`（元数据 + 部署配置）和 `tests.json`（Hub 用它做上线自检）
-3. **必须打一个 GitHub Release**（Hub 只索引 release，不看普通 commit）
-4. 到 console.runpod.io 的 Hub 发布页填仓库地址；之后 Runpod 会构建/测试/人工审核上架
-5. 以后更新：再发一个 release 即可，Hub 自动重新索引构建（约 1 小时）
-
-差别在于 **Hub 会用仓库里的 Dockerfile 在 Runpod 的构建机上重新构建镜像**（这套依赖装起来
-本机实测 30-60 分钟），而我们现在是本地构建好推到 Docker Hub 的现成镜像。两种可以并存：
-Hub listing 负责"一键部署 + 从 GitHub 版本化"，日常部署仍可直接用现成镜像 tag。
-
-`.runpod/tests.json` 现在只跑 `{"action":"health"}`（300s 超时），自检卡型是
-`NVIDIA A100-SXM4-80GB`（GitHub 集成第一次构建就是用它跑 TESTING 阶段的：换成 96GB 的
-Blackwell 时在 US-MD-1 排不到机器，会一直卡在 TESTING）。要让自检跑真实生成，
-把超时调到 1800s 并在 `input` 里给一个完整任务即可。
+`.runpod/tests.json` 当前只跑 `{"action":"health"}`，健康检查不依赖模型卷、不下载模型。真实
+FL2VA / Ref2VA 仍应在新内部镜像构建成功后通过 Endpoint 单独验证。

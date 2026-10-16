@@ -265,6 +265,7 @@ RUN set -eux; \
 # LFS object. Every file is staged and renamed only after it exists.
 RUN set -eux; \
     if [ "$BAKE_MODELS" = "true" ]; then \
+      downloaded=0; \
       while IFS="$(printf '\t')" read -r sub name url; do \
         case "$sub" in ''|\#*) continue ;; esac; \
         dest="/opt/comfyui-baked/models/$sub/$name"; \
@@ -296,9 +297,10 @@ RUN set -eux; \
         esac; \
         test -s "$dest.part"; \
         mv -f "$dest.part" "$dest"; \
+        downloaded=$((downloaded + 1)); \
         stat -c 'bake-model: %n %s bytes' "$dest"; \
       done < /tmp/build/models-manifest.txt; \
-      test "$(find /opt/comfyui-baked/models -type f | wc -l)" -eq 14; \
+      test "$downloaded" -eq 14; \
       du -sh /opt/comfyui-baked/models; \
     else \
       echo 'bake-model: disabled'; \

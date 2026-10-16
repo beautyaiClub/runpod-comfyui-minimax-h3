@@ -1,0 +1,347 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+      "strength_model": 1
+    }
+  },
+  "3": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+      "type": "minimax",
+      "device": "default"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    }
+  },
+  "5": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    }
+  },
+  "6": {
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "inputs": {
+      "ref_images.ref_image_0": [
+        "img_0",
+        0
+      ],
+      "ref_images.ref_image_1": [
+        "img_1",
+        0
+      ],
+      "ref_images.ref_image_2": [
+        "img_2",
+        0
+      ],
+      "ref_images.ref_image_3": [
+        "img_3",
+        0
+      ],
+      "ref_images.ref_image_4": [
+        "img_4",
+        0
+      ],
+      "ref_images.ref_image_5": [
+        "img_5",
+        0
+      ],
+      "ref_images.ref_image_6": [
+        "img_6",
+        0
+      ],
+      "ref_images.ref_image_7": [
+        "img_7",
+        0
+      ],
+      "ref_images.ref_image_8": [
+        "img_8",
+        0
+      ],
+      "ref_videos.ref_video_0": [
+        "vid_0",
+        0
+      ],
+      "ref_videos.ref_video_1": [
+        "vid_1",
+        0
+      ],
+      "ref_videos.ref_video_2": [
+        "vid_2",
+        0
+      ],
+      "ref_audios.ref_audio_0": [
+        "aud_0",
+        0
+      ],
+      "ref_audios.ref_audio_1": [
+        "aud_1",
+        0
+      ],
+      "ref_audios.ref_audio_2": [
+        "aud_2",
+        0
+      ],
+      "clip": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "audio_vae": [
+        "5",
+        0
+      ],
+      "prompt": "",
+      "width": 832,
+      "height": 480,
+      "length": 124,
+      "ref_image_size": "match"
+    }
+  },
+  "7": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "conditioning": [
+        "6",
+        0
+      ]
+    }
+  },
+  "8": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "res_multistep"
+    }
+  },
+  "9": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 8,
+      "denoise": 1
+    }
+  },
+  "10": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 498342937
+    }
+  },
+  "11": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "10",
+        0
+      ],
+      "guider": [
+        "7",
+        0
+      ],
+      "sampler": [
+        "8",
+        0
+      ],
+      "sigmas": [
+        "9",
+        0
+      ],
+      "latent_image": [
+        "6",
+        1
+      ]
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    }
+  },
+  "14": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "12",
+        0
+      ],
+      "audio": [
+        "13",
+        0
+      ],
+      "fps": 24
+    }
+  },
+  "15": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "14",
+        0
+      ],
+      "filename_prefix": "minimax_h3/api_ref2va",
+      "format": "mp4",
+      "codec": "h264"
+    }
+  },
+  "img_0": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-1.png"
+    }
+  },
+  "img_1": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-2.png"
+    }
+  },
+  "img_2": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-3.png"
+    }
+  },
+  "img_3": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-4.png"
+    }
+  },
+  "img_4": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-5.png"
+    }
+  },
+  "img_5": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-6.png"
+    }
+  },
+  "img_6": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-7.png"
+    }
+  },
+  "img_7": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-8.png"
+    }
+  },
+  "img_8": {
+    "class_type": "LoadImageFromUrl",
+    "inputs": {
+      "image": "https://example.invalid/ref-image-9.png"
+    }
+  },
+  "vid_0": {
+    "class_type": "LoadVideoFromURL",
+    "inputs": {
+      "url": "https://example.invalid/ref-video-1.mp4",
+      "force_rate": 24,
+      "force_size": "Disabled",
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    }
+  },
+  "vid_1": {
+    "class_type": "LoadVideoFromURL",
+    "inputs": {
+      "url": "https://example.invalid/ref-video-2.mp4",
+      "force_rate": 24,
+      "force_size": "Disabled",
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    }
+  },
+  "vid_2": {
+    "class_type": "LoadVideoFromURL",
+    "inputs": {
+      "url": "https://example.invalid/ref-video-3.mp4",
+      "force_rate": 24,
+      "force_size": "Disabled",
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    }
+  },
+  "aud_0": {
+    "class_type": "BeautyAI_LoadAudioFromURL",
+    "inputs": {
+      "url": "https://example.invalid/ref-audio-1.mp3"
+    }
+  },
+  "aud_1": {
+    "class_type": "BeautyAI_LoadAudioFromURL",
+    "inputs": {
+      "url": "https://example.invalid/ref-audio-2.mp3"
+    }
+  },
+  "aud_2": {
+    "class_type": "BeautyAI_LoadAudioFromURL",
+    "inputs": {
+      "url": "https://example.invalid/ref-audio-3.mp3"
+    }
+  }
+}

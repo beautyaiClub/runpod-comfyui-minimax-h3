@@ -1,0 +1,6 @@
+# LoadImageFromUrl (art-venture): requests + Pillow + numpy (all shipped by ComfyUI)
+# LoadVideoFromURL (Mixlab):     OpenCV
+# BeautyAI_LoadAudioFromURL is installed from its own repository
+# (beautyaiClub/comfyui-beautyai), which needs boto3 for its R2 upload node.
+opencv-python
+boto3>=1.34.0

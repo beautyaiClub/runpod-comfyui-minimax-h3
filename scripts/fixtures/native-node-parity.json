@@ -1,0 +1,359 @@
+{
+  "_source": "Captured from http://192.168.10.20:8189/object_info on 2026-10-15 (ComfyUI 0.37.0, torch 2.9.1+cu128). Schema of the nodes used by the native FL2VA / Ref2VA graphs.",
+  "_usage": "scripts/verify-native-h3.py diffs the running image against this file.",
+  "nodes": {
+    "LoadImageFromUrl": {
+      "python_module": "custom_nodes.comfyui-art-venture",
+      "category": "ArtVenture/Image",
+      "display_name": "Load Image From URL",
+      "required": {
+        "image": {
+          "type": "STRING",
+          "default": ""
+        }
+      },
+      "optional": {
+        "keep_alpha_channel": {
+          "type": "BOOLEAN",
+          "default": false
+        },
+        "output_mode": {
+          "type": "BOOLEAN",
+          "default": false
+        }
+      },
+      "output": [
+        "IMAGE",
+        "MASK",
+        "BOOLEAN"
+      ],
+      "output_name": [
+        "images",
+        "masks",
+        "has_image"
+      ],
+      "output_is_list": [
+        true,
+        true,
+        false
+      ]
+    },
+    "LoadVideoFromURL": {
+      "python_module": "custom_nodes.comfyui-mixlab-nodes",
+      "category": "♾️Mixlab/Video",
+      "display_name": "Load Video from URL",
+      "required": {
+        "url": {
+          "type": "STRING",
+          "default": "https://example.com/video.mp4"
+        },
+        "force_rate": {
+          "type": "INT",
+          "default": 0
+        },
+        "force_size": {
+          "type": [
+            "Disabled",
+            "Custom Height",
+            "Custom Width",
+            "Custom",
+            "256x?",
+            "?x256",
+            "256x256",
+            "512x?",
+            "?x512",
+            "512x512"
+          ]
+        },
+        "custom_width": {
+          "type": "INT",
+          "default": 512
+        },
+        "custom_height": {
+          "type": "INT",
+          "default": 512
+        },
+        "frame_load_cap": {
+          "type": "INT",
+          "default": 0
+        },
+        "skip_first_frames": {
+          "type": "INT",
+          "default": 0
+        },
+        "select_every_nth": {
+          "type": "INT",
+          "default": 1
+        }
+      },
+      "optional": {},
+      "output": [
+        "IMAGE",
+        "INT",
+        "VHS_VIDEOINFO"
+      ],
+      "output_name": [
+        "frames",
+        "frame_count",
+        "video_info"
+      ],
+      "output_is_list": [
+        false,
+        false,
+        false
+      ]
+    },
+    "BeautyAI_LoadAudioFromURL": {
+      "python_module": "custom_nodes.comfyui-beautyai",
+      "category": "BeautyAI",
+      "display_name": "从 URL 加载音频",
+      "required": {
+        "url": {
+          "type": "STRING",
+          "default": ""
+        }
+      },
+      "optional": {},
+      "output": [
+        "AUDIO"
+      ],
+      "output_name": [
+        "audio"
+      ],
+      "output_is_list": [
+        false
+      ]
+    },
+    "MiniMaxH3ImageToVideo": {
+      "python_module": "comfy_extras.nodes_minimax_h3",
+      "category": "model/conditioning/minimax",
+      "display_name": "MiniMax H3 Image to Video",
+      "required": {
+        "clip": {
+          "type": "CLIP"
+        },
+        "vae": {
+          "type": "VAE"
+        },
+        "prompt": {
+          "type": "STRING"
+        },
+        "width": {
+          "type": "INT",
+          "default": 1344
+        },
+        "height": {
+          "type": "INT",
+          "default": 768
+        },
+        "length": {
+          "type": "INT",
+          "default": 124
+        }
+      },
+      "optional": {
+        "first_frame": {
+          "type": "IMAGE"
+        },
+        "last_frame": {
+          "type": "IMAGE"
+        }
+      },
+      "output": [
+        "CONDITIONING",
+        "LATENT"
+      ],
+      "output_name": [
+        "positive",
+        "LATENT"
+      ],
+      "output_is_list": [
+        false,
+        false
+      ]
+    },
+    "MiniMaxH3ReferenceToVideo": {
+      "python_module": "comfy_extras.nodes_minimax_h3",
+      "category": "model/conditioning/minimax",
+      "display_name": "MiniMax H3 Reference to Video",
+      "required": {
+        "clip": {
+          "type": "CLIP"
+        },
+        "prompt": {
+          "type": "STRING"
+        },
+        "width": {
+          "type": "INT",
+          "default": 1344
+        },
+        "height": {
+          "type": "INT",
+          "default": 768
+        },
+        "length": {
+          "type": "INT",
+          "default": 124
+        },
+        "ref_image_size": {
+          "type": "COMBO",
+          "default": "match"
+        }
+      },
+      "optional": {
+        "vae": {
+          "type": "VAE"
+        },
+        "audio_vae": {
+          "type": "VAE"
+        },
+        "ref_images": {
+          "type": "COMFY_AUTOGROW_V3"
+        },
+        "ref_videos": {
+          "type": "COMFY_AUTOGROW_V3"
+        },
+        "ref_video_audios": {
+          "type": "COMFY_AUTOGROW_V3"
+        },
+        "ref_audios": {
+          "type": "COMFY_AUTOGROW_V3"
+        }
+      },
+      "output": [
+        "CONDITIONING",
+        "LATENT"
+      ],
+      "output_name": [
+        "positive",
+        "LATENT"
+      ],
+      "output_is_list": [
+        false,
+        false
+      ]
+    },
+    "MiniMaxH3SigmaShift": {
+      "python_module": "comfy_extras.nodes_minimax_h3",
+      "category": "model/patch/minimax",
+      "display_name": "ModelSamplingMiniMaxH3",
+      "required": {
+        "model": {
+          "type": "MODEL"
+        },
+        "shift_video": {
+          "type": "FLOAT",
+          "default": 12
+        },
+        "shift_audio": {
+          "type": "FLOAT",
+          "default": 3
+        }
+      },
+      "optional": {},
+      "output": [
+        "MODEL"
+      ],
+      "output_name": [
+        "MODEL"
+      ],
+      "output_is_list": [
+        false
+      ]
+    },
+    "CreateVideo": {
+      "python_module": "comfy_extras.nodes_video",
+      "category": "video",
+      "display_name": "Create Video",
+      "required": {
+        "images": {
+          "type": "IMAGE"
+        },
+        "fps": {
+          "type": "FLOAT",
+          "default": 30
+        }
+      },
+      "optional": {
+        "audio": {
+          "type": "AUDIO"
+        },
+        "bit_depth": {
+          "type": "COMBO",
+          "default": "auto"
+        },
+        "color_space": {
+          "type": "COMBO",
+          "default": "sRGB"
+        },
+        "codec": {
+          "type": "COMBO",
+          "default": "none"
+        }
+      },
+      "output": [
+        "VIDEO"
+      ],
+      "output_name": [
+        "VIDEO"
+      ],
+      "output_is_list": [
+        false
+      ]
+    },
+    "SaveVideo": {
+      "python_module": "comfy_extras.nodes_video",
+      "category": "video",
+      "display_name": "Save Video",
+      "required": {
+        "video": {
+          "type": "VIDEO"
+        },
+        "filename_prefix": {
+          "type": "STRING",
+          "default": "video/ComfyUI"
+        },
+        "format": {
+          "type": "COMFY_DYNAMICCOMBO_V3"
+        }
+      },
+      "optional": {
+        "codec": {
+          "type": "COMFY_DYNAMICCOMBO_V3"
+        }
+      },
+      "output": [
+        "VIDEO"
+      ],
+      "output_name": [
+        "video"
+      ],
+      "output_is_list": [
+        false
+      ]
+    },
+    "VAEDecodeAudio": {
+      "python_module": "comfy_extras.nodes_audio",
+      "category": "model/latent",
+      "display_name": "VAE Decode Audio",
+      "required": {
+        "samples": {
+          "type": "LATENT"
+        },
+        "vae": {
+          "type": "VAE"
+        }
+      },
+      "optional": {},
+      "output": [
+        "AUDIO"
+      ],
+      "output_name": [
+        "AUDIO"
+      ],
+      "output_is_list": [
+        false
+      ]
+    }
+  }
+}

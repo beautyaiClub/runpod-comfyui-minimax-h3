@@ -1,6 +1,6 @@
 {
   "title": "MiniMax H3 Native - Video + Audio",
-  "description": "Native MiniMax H3 FL2VA and Ref2VA on ComfyUI CUDA 13. Enhancement nodes and enhancement templates are removed. Models are read from a Network Volume.",
+  "description": "Native MiniMax H3 FL2VA and Ref2VA on ComfyUI CUDA 13. All six model weights and workflow templates are included in the image.",
   "type": "serverless",
   "category": "video",
   "config": {

@@ -347,10 +347,14 @@ def _patch(prompt, job):
     video_urls = [v for v in raw_videos if v.startswith(("http://", "https://"))]
     audio_urls = [v for v in raw_audios if v.startswith(("http://", "https://"))]
 
+    model_roots = [f"{COMFY_DIR}/models"]
+    if os.environ.get("H3_MODEL_SOURCE") != "image":
+        model_roots.insert(0, "/runpod-volume/models")
+
     def _find_file(kind, needle):
         """Locate a model file under the volume + local model dirs."""
         hits = sorted(
-            h for pat in (f"/runpod-volume/models/{kind}/**/*", f"{COMFY_DIR}/models/{kind}/**/*")
+            h for pat in (f"{root}/{kind}/**/*" for root in model_roots)
             for h in glob.glob(pat, recursive=True)
             if needle.lower() in Path(h).name.lower())
         # "fl2va"/"ref2va" needles must not grab 10Eros files which also contain them
@@ -361,7 +365,7 @@ def _patch(prompt, job):
     def _model_exists(kind, name):
         return any(
             Path(h).name == name
-            for pat in (f"/runpod-volume/models/{kind}/*", f"{COMFY_DIR}/models/{kind}/*")
+            for pat in (f"{root}/{kind}/*" for root in model_roots)
             for h in glob.glob(pat))
 
     canvas = _h3_size(job)
@@ -916,32 +920,6 @@ def _result_payload(outputs, texts, repairs):
 async def handler(job):
     print(f"[handler] job {job.get('id')} received", flush=True)
     inputs = job.get("input") or {}
-    if inputs.get("action") == "native_cleanup":
-        # One-time migration helper: remove enhancement-only artifacts from the
-        # existing Network Volume without starting ComfyUI or touching native
-        # FL2VA / Ref2VA model files.
-        root = Path("/runpod-volume")
-        targets = [
-            root / "workflows" / "enhancers",
-            root / "models" / "tensorrt",
-            root / "models" / "LLM",
-            root / "models" / "ultralytics",
-            root / "models" / "sams",
-            root / "models" / "vae_approx",
-            root / "models" / "diffusion_models" / "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
-            root / "models" / "loras" / "h3_character_swap_pro4500_1000.safetensors",
-            root / "models" / "loras" / "h3-realism-people-t2v-i2v-r2v.safetensors",
-        ]
-        removed = []
-        for target in targets:
-            if not target.exists():
-                continue
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-            removed.append(str(target))
-        return {"status": "ok", "native_only": True, "removed": removed}
     if inputs.get("action") == "health":
         # Hub smoke test: answers 200 without touching ComfyUI or models, so it
         # also works on an endpoint deployed without the network volume.
@@ -954,7 +932,14 @@ async def handler(job):
             "workflow_sets": sets,
             "workflows": sets.get(DEFAULT_TEMPLATE_SET, []),
             "workflows_dir": str(WORKFLOWS_DIR),
-            "volume_mounted": os.path.isdir("/runpod-volume"),
+            "volume_mounted": os.path.ismount("/runpod-volume"),
+            "model_source": os.environ.get("H3_MODEL_SOURCE", "volume"),
+            "models_dir": str(Path(COMFY_DIR) / "models"),
+            "baked_models": [
+                {"filename": item["filename"], "expected_size": item["size"],
+                 "size": (Path(COMFY_DIR) / "models" / item["subdir"] / item["filename"]).stat().st_size}
+                for item in json.loads(Path("/opt/serverless/models-lock.json").read_text())["models"]
+            ] if os.environ.get("H3_MODEL_SOURCE") == "image" else [],
         }
     if inputs.get("enhance"):
         raise RuntimeError("enhance=true is disabled in the native-only H3 worker")

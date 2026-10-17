@@ -1,6 +1,6 @@
 {
-  "title": "MiniMax H3 — Video + Audio",
-  "description": "MiniMax H3 on ComfyUI (CUDA 13): text / image / first-last-frame / reference-to-video with audio. The RunPod Dockerfile bakes the complete H3 model set into the image; no model volume is required.",
+  "title": "MiniMax H3 Native - Video + Audio",
+  "description": "Native MiniMax H3 FL2VA and Ref2VA on ComfyUI CUDA 13. Enhancement nodes and enhancement templates are removed. Models are read from a Network Volume.",
   "type": "serverless",
   "category": "video",
   "config": {
@@ -17,18 +17,8 @@
         "input": {
           "name": "默认模板集",
           "type": "string",
-          "description": "native（原生）或 enhancers（增强）",
+          "description": "固定使用 native FL2VA / Ref2VA 模板",
           "default": "native",
-          "advanced": true
-        }
-      },
-      {
-        "key": "HF_TOKEN",
-        "input": {
-          "name": "Hugging Face token",
-          "type": "string",
-          "description": "仅拉取 gated 仓库时需要",
-          "default": "",
           "advanced": true
         }
       },

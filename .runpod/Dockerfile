@@ -1,63 +1,30 @@
-# RunPod GitHub build Dockerfile.
+# MiniMax H3 RunPod Serverless worker — native FL2VA / Ref2VA only.
 #
-# Reuse the already-built 13.8GB code/runtime layer. The final image produced
-# by this GitHub build is stored in RunPod's internal registry; we do not push
-# the new model image to Docker Hub. Reusing this layer avoids spending the
-# builder timeout reinstalling Ubuntu/CUDA/PyTorch/ComfyUI.
+# The production build starts from the tested CUDA 13.0 ComfyUI runtime image.
+# Models are supplied by the Network Volume; this image contains code, native
+# URL loaders, the handler and the native workflow templates only.
 FROM codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0
 
-ARG BAKE_MODELS=true
-
-# The base image already contains curl, the Hugging Face CLI, CUDA 13, Python,
-# ComfyUI and all pinned custom nodes. Download models into the image instead of
-# /runpod-volume. Hugging Face uses `hf` with Xet disabled because a direct curl
-# resolve URL can return a tiny error document from a builder network.
-COPY models-manifest.txt /tmp/build-models-manifest.txt
+# Remove enhancement-only packs inherited from the reusable base image.
 RUN set -eux; \
-    if [ "$BAKE_MODELS" = "true" ]; then \
-      downloaded=0; \
-      while IFS="$(printf '\t')" read -r sub name url; do \
-        case "$sub" in ''|\#*) continue ;; esac; \
-        dest="/opt/comfyui-baked/models/$sub/$name"; \
-        mkdir -p "$(dirname "$dest")"; \
-        echo "bake-model: $name"; \
-        case "$url" in \
-          https://huggingface.co/*/resolve/*) \
-            hf_ref="${url#https://huggingface.co/}"; \
-            repo_id="${hf_ref%%/resolve/*}"; \
-            hf_ref="${hf_ref#*/resolve/}"; \
-            revision="${hf_ref%%/*}"; \
-            repo_path="${hf_ref#*/}"; \
-            tmp_dir="/tmp/hf-model"; \
-            rm -rf "$tmp_dir"; \
-            mkdir -p "$tmp_dir"; \
-            HF_HUB_DISABLE_XET=1 HF_HUB_ENABLE_HF_TRANSFER=1 \
-              hf download "$repo_id" "$repo_path" --revision "$revision" --local-dir "$tmp_dir"; \
-            test -s "$tmp_dir/$repo_path"; \
-            mv -f "$tmp_dir/$repo_path" "$dest.part"; \
-            rm -rf "$tmp_dir"; \
-            ;; \
-          *) \
-            if [ -f "$dest.part" ]; then \
-              curl -fL --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$dest.part" "$url"; \
-            else \
-              curl -fL --retry 5 --retry-all-errors --retry-delay 5 -o "$dest.part" "$url"; \
-            fi; \
-            ;; \
-        esac; \
-        test -s "$dest.part"; \
-        mv -f "$dest.part" "$dest"; \
-        downloaded=$((downloaded + 1)); \
-        stat -c 'bake-model: %n %s bytes' "$dest"; \
-      done < /tmp/build-models-manifest.txt; \
-      test "$downloaded" -eq 14; \
-      du -sh /opt/comfyui-baked/models; \
-    else \
-      echo 'bake-model: disabled'; \
-    fi
+    rm -rf \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-RIFE-TensorRT-Auto \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-Upscaler-TensorRT-Auto \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-Pixaroma \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-Impact-Pack \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-Impact-Subpack \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-Easy-Use \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-QwenVL-Mod \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-PerfectVideoResolution \
+      /opt/comfyui-baked/custom_nodes/ComfyUI-TagForge \
+      /opt/comfyui-baked/models/tensorrt \
+      /opt/comfyui-baked/models/LLM \
+      /opt/comfyui-baked/models/ultralytics \
+      /opt/comfyui-baked/models/sams \
+      /opt/comfyui-baked/models/vae_approx
 
-# Refresh the serverless code and templates from this commit. This also replaces
-# the old volume-first entrypoint with the image-first implementation.
+# Native H3 loaders and serverless code.
+COPY custom_nodes/h3_url_loaders/ /opt/comfyui-baked/custom_nodes/h3_url_loaders/
 COPY handler.py /opt/serverless/handler.py
 COPY serverless-entrypoint.sh /opt/serverless/entrypoint.sh
 COPY populate-volume.sh /opt/serverless/populate-volume.sh
@@ -67,15 +34,17 @@ COPY scripts/validate-templates.py /opt/serverless/validate-templates.py
 COPY scripts/test-handler-templates.py /opt/serverless/test-handler-templates.py
 COPY scripts/fixtures/ /opt/serverless/fixtures/
 COPY workflows-api/native/ /opt/workflows/native/
-COPY workflows-api/enhancers/ /opt/workflows/enhancers/
 
-ENV BAKED_MODELS=true \
+ENV BAKED_MODELS=false \
     VOLUME_AUTOPOPULATE=false \
-    COMFYUI_DIR=/opt/comfyui-baked \
-    WORKFLOWS_DIR=/opt/workflows
+    COMFYUI_DIR=/workspace/runpod-slim/ComfyUI \
+    WORKFLOWS_DIR=/opt/workflows \
+    H3_TEMPLATE_SET=native \
+    JOB_TIMEOUT_S=1800
 
 RUN set -eux; \
-    sed -i 's/\r$//' /opt/serverless/*.sh /opt/serverless/*.py /opt/serverless/models-manifest.txt /opt/workflows/*/*.json; \
+    rm -rf /opt/workflows/enhancers; \
+    sed -i 's/\r$//' /opt/serverless/*.sh /opt/serverless/*.py /opt/serverless/models-manifest.txt /opt/workflows/native/*.json; \
     chmod +x /opt/serverless/entrypoint.sh /opt/serverless/populate-volume.sh; \
     head -n 1 /opt/serverless/entrypoint.sh | grep -qx '#!/bin/bash'; \
     head -n 1 /opt/serverless/populate-volume.sh | grep -qx '#!/bin/bash'

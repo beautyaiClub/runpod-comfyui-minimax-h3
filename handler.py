@@ -7,9 +7,9 @@ input media, queues the prompt, and returns the produced media as base64.
 Job input:
   {
     "workflow": "MiniMaxH3-Native-FL2VA.json",     # file in $WORKFLOWS_DIR/<template_set>
-    "template_set": "native|enhancers",            # optional, default $H3_TEMPLATE_SET (native)
+    "template_set": "native",                       # optional, default $H3_TEMPLATE_SET (native)
     "prompt":   "...",                             # enhancer/directive text
-    "config":   "native|native_turbo|r2va_native|r2va_native_turbo|10eros|10eros_turbo",
+    "config":   "native|native_turbo",
     "camera_tag": "[ORBIT]",                       # optional
     "seconds":  6,                                 # optional duration override
     "images":   ["https://... or base64"],         # optional, fills LoadImage*(FromUrl) nodes in id order
@@ -17,11 +17,9 @@ Job input:
     "videos":   ["https://..."], "audios": ["https://..."]   # optional, ref2va reference media
   }
 
-Template sets (subdirectories of WORKFLOWS_DIR, see README):
+Template set:
   native     graphs built by myreels-h3-adapter, core ComfyUI nodes + the three
-             URL loaders only — no enhancement nodes involved
-  enhancers  the reference project's templates (QwenVL prompt enhancer, RIFE /
-             TensorRT upscale, face detailer, wildcards)
+             URL loaders only. Enhancement nodes and templates are disabled.
 """
 
 import asyncio
@@ -45,7 +43,7 @@ import runpod
 COMFY_DIR = os.environ.get("COMFYUI_DIR", "/workspace/runpod-slim/ComfyUI")
 COMFY_URL = "http://127.0.0.1:8188"
 WORKFLOWS_DIR = Path(os.environ.get("WORKFLOWS_DIR", "/opt/workflows"))
-TEMPLATE_SETS = ("native", "enhancers")
+TEMPLATE_SETS = ("native",)
 DEFAULT_TEMPLATE_SET = os.environ.get("H3_TEMPLATE_SET", "native").strip().lower() or "native"
 JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "1800"))
 
@@ -57,12 +55,8 @@ S3_PREFIX = os.environ.get("S3_OUTPUT_PREFIX", "outputs")
 
 # Config → unet filename needle + sampler values (mirrors chat_service.py _MINIMAX_CONFIGS)
 MINIMAX_CONFIGS = {
-    "native":            {"unet": "fl2va",  "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
-    "native_turbo":      {"unet": "fl2va",  "steps": 8,  "sampler": "euler",         "scheduler": "simple", "shift_video": 6.0,  "shift_audio": 3.0, "lora": "fl2v_turbo",  "tau": 1.3},
-    "r2va_singularity":       {"unet": "Singularity", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "lora": None, "tau": None, "sigma_off": True},
-    "r2va_singularity_turbo": {"unet": "Singularity", "steps": 6,  "sampler": "euler",         "scheduler": "beta",   "lora": "ref2v_turbo_4step", "tau": 1.3, "sigma_off": True},
-    "10eros":            {"unet": "10eros", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
-    "10eros_turbo":      {"unet": "10eros", "steps": 8,  "sampler": "euler",         "scheduler": "simple", "shift_video": 6.0,  "shift_audio": 3.0, "lora": "fusion_turbo", "tau": 1.3},
+    "native":       {"unet": "fl2va", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
+    "native_turbo": {"unet": "fl2va", "steps": 8,  "sampler": "euler", "scheduler": "simple", "shift_video": 6.0, "shift_audio": 3.0, "lora": "fl2v_turbo", "tau": 1.3},
 }
 
 
@@ -199,31 +193,20 @@ def _auto_workflow(job):
     `enhance` switch. Mirrors the LAN adapter's naming so the same job body works
     against both backends.
     """
-    enhance = bool(job.get("enhance"))
+    if job.get("enhance"):
+        raise RuntimeError("enhance=true is disabled in the native-only H3 worker")
     refs = bool(_as_list(job.get("images")) or _as_list(job.get("videos")) or _as_list(job.get("audios")))
-    has_last = bool(job.get("image2"))
-    if enhance:
-        if refs:
-            return "MiniMaxH3-Singularity-R2VA.json" if _as_list(job.get("videos")) else "MiniMaxH3-Turbo-R2VA.json"
-        if has_last:
-            return "MiniMaxH3-Turbo-FL2VA.json"
-        if job.get("image1"):
-            return "MiniMaxH3-Turbo-I2VA.json"
-        return "MiniMaxH3-Turbo-T2VA.json"
     return "MiniMaxH3-Native-Ref2VA.json" if refs else "MiniMaxH3-Native-FL2VA.json"
 
 
 def _auto_config(job):
     """Sampling preset for a job that did not pin one.
 
-    Users should not have to pick a preset: the turbo recipes are what the LAN
-    adapter runs by default (8 steps + lightx2v turbo LoRA), and the Singularity
-    fusion model is only the right unet for the reference-material channel.
+    Users should not have to pick a preset: native turbo is the LAN adapter
+    default (8 steps + lightx2v turbo LoRA).
     """
     if job.get("enhance"):
-        refs = bool(_as_list(job.get("images")) or _as_list(job.get("videos")) or _as_list(job.get("audios")))
-        if refs:
-            return "r2va_singularity_turbo"
+        raise RuntimeError("enhance=true is disabled in the native-only H3 worker")
     return "native_turbo"
 
 
@@ -947,6 +930,8 @@ async def handler(job):
             "workflows_dir": str(WORKFLOWS_DIR),
             "volume_mounted": os.path.isdir("/runpod-volume"),
         }
+    if inputs.get("enhance"):
+        raise RuntimeError("enhance=true is disabled in the native-only H3 worker")
     # Any real workload needs ComfyUI — wait for the background boot first.
     await _ensure_comfy()
     _prune_volume_outputs()

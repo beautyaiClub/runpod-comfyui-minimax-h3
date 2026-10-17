@@ -916,6 +916,32 @@ def _result_payload(outputs, texts, repairs):
 async def handler(job):
     print(f"[handler] job {job.get('id')} received", flush=True)
     inputs = job.get("input") or {}
+    if inputs.get("action") == "native_cleanup":
+        # One-time migration helper: remove enhancement-only artifacts from the
+        # existing Network Volume without starting ComfyUI or touching native
+        # FL2VA / Ref2VA model files.
+        root = Path("/runpod-volume")
+        targets = [
+            root / "workflows" / "enhancers",
+            root / "models" / "tensorrt",
+            root / "models" / "LLM",
+            root / "models" / "ultralytics",
+            root / "models" / "sams",
+            root / "models" / "vae_approx",
+            root / "models" / "diffusion_models" / "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+            root / "models" / "loras" / "h3_character_swap_pro4500_1000.safetensors",
+            root / "models" / "loras" / "h3-realism-people-t2v-i2v-r2v.safetensors",
+        ]
+        removed = []
+        for target in targets:
+            if not target.exists():
+                continue
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            removed.append(str(target))
+        return {"status": "ok", "native_only": True, "removed": removed}
     if inputs.get("action") == "health":
         # Hub smoke test: answers 200 without touching ComfyUI or models, so it
         # also works on an endpoint deployed without the network volume.

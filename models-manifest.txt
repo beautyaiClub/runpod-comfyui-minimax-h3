@@ -1,5 +1,10 @@
-# Native H3 models bundled during the image build.
-# Format: <subdir>\t<filename>\t<URL>
+# Native MiniMax H3 model manifest.
+# Format: <models subdir>	<filename>	<URL>
+# The production Network Volume contains only the six files required by the
+# native FL2VA / Ref2VA workflows. Enhancement-only weights are intentionally
+# excluded: QwenVL GGUF, Singularity, face/SAM, style/character LoRAs, TAE and
+# TensorRT engines belong to the removed enhancement chain.
+
 diffusion_models	minimax_h3_fl2va_pruned_int8_convrot.safetensors	https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
 text_encoders	qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors	https://huggingface.co/Momoking/Qwen3-VL-32B-Heretic-MiniMax-H3-NVFP4/resolve/main/qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors
 loras	minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors	https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors

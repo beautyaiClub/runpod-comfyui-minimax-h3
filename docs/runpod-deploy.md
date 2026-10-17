@@ -1,35 +1,221 @@
-# RunPod 部署与验证
+# RunPod 部署备忘
 
-RunPod GitHub builder 从仓库根目录构建 `.runpod/Dockerfile`。基础镜像为
-`codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0`。六个 native 模型在构建时下载至
-`/opt/comfyui-baked/models`，以固定 revision、大小与 SHA256 校验。
+## 当前生产配置
 
-## 无卷部署
+| 项目 | 值 |
+| --- | --- |
+| Endpoint | `3w2llhe9btnsmn` / `myreels-minimax-h3` |
+| GitHub | `beautyaiClub/runpod-comfyui-minimax-h3` / `main` |
+| 基础镜像 | `codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0` |
+| 生产卷 | Network Volume `icf8p97vyb` / `myreels-h3-models` |
+| 机房 | `US-MD-1` |
+| 挂载路径 | `/runpod-volume` |
+| 容器盘 | 30GB |
+| GPU 池 | `AMPERE_80`、`BLACKWELL_96` |
+| Worker | `min=0`、`max=1`、`idleTimeout=5` |
 
-- Endpoint：`3w2llhe9btnsmn`
-- 模型来源：`H3_MODEL_SOURCE=image`
-- 模板目录：`/opt/workflows/native`
-- 卷挂载：`volumes=[]`、`networkVolumeIds=[]`
-- Worker：`min=0`、`max=1`、`idleTimeout=5`、FlashBoot OFF
-- GPU：`AMPERE_80`、`BLACKWELL_96`，CUDA 13.0
+Global Volume 已删除。Endpoint 当前没有 global mount，只有 Network Volume：
 
-构建成功后先确认新内部镜像已部署，再解除卷挂载验证。原 Network Volume
-`icf8p97vyb` 保留作回退，测试成功不等于已删除此卷，也不自动停止它的存储费。
+```json
+{
+  "global": [],
+  "network": [{"volumeId": "icf8p97vyb"}]
+}
+```
 
-## 冷启动测试
+## Native-only 变更
 
-每项任务前先暂停 Endpoint，确认旧 worker 不再运行，然后恢复 max=1 并从 Generator 提交任务。
-保存 Generator task id、RunPod job id、worker id、GPU、排队等待、执行时间、总耗时、费用和产物。
+本次 native-only 版本已经从代码和构建中删除：
 
-这测量的是容器/模型进程冷启动；宿主机镜像层或 OS 文件缓存可能已缓存，不等于强制重新拉取镜像。
-高分辨率参数 `720p` 当前映射到 1344×768，报告需按产物实际尺寸记录。
+- ComfyUI-RIFE-TensorRT-Auto
+- ComfyUI-Upscaler-TensorRT-Auto
+- ComfyUI-Pixaroma
+- ComfyUI-Impact-Pack / Impact-Subpack
+- ComfyUI-Easy-Use
+- ComfyUI-QwenVL-Mod
+- ComfyUI-PerfectVideoResolution
+- ComfyUI-TagForge
+- 所有 `workflows-api/enhancers/*.json`
+- QwenVL GGUF、Singularity、face/SAM、style/character LoRA、TAE 和 TensorRT 文件
 
-## 验收
+`enhance=true` 会由 handler 直接拒绝，避免启动一个不会真正进入 GPU 推理的增强任务。
+生产只保留：
 
-1. RunPod build state=COMPLETED，test=SUCCESS。
-2. Endpoint global/network mounts 均为空。
-3. health 的 model_source=image，模型六个文件大小匹配 lock，模板仅 native。
-4. Generator 完成真实生成并返回带元数据的视频。
-5. 每项记录冷启动依据，最后恢复 min=0 的自动缩容配置。
+```text
+MiniMaxH3-Native-FL2VA.json
+MiniMaxH3-Native-Ref2VA.json
+```
 
-健康检查只说明 handler 的状态；ComfyUI 为 booting 时不能作为完成推理的证据。
+## Dockerfile 构建
+
+根 `Dockerfile` 和 `/.runpod/Dockerfile` 都使用：
+
+```dockerfile
+FROM codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0
+```
+
+这个基础镜像已经包含 CUDA 13.0、ComfyUI 和 Python runtime。新的 Dockerfile 只做以下事情：
+
+1. 删除基础镜像里继承的增强 custom nodes；
+2. 复制 native URL loaders、handler 和 native workflows；
+3. 将 `models-manifest.txt` 限制为 native 所需模型；
+4. 设置 `VOLUME_AUTOPOPULATE=false`，从 Network Volume 读取模型。
+
+这样 RunPod builder 不会再次解析和安装整套 Python/CUDA 依赖，也不会下载和导出 90GB 模型镜像。
+
+## Network Volume 内容
+
+```text
+/runpod-volume/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+/runpod-volume/models/text_encoders/qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors
+/runpod-volume/models/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+/runpod-volume/models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+/runpod-volume/models/vae/minimax_h3_video_vae_fp16.safetensors
+/runpod-volume/models/vae/minimax_h3_audio_vae_fp32.safetensors
+/runpod-volume/workflows/native/MiniMaxH3-Native-FL2VA.json
+/runpod-volume/workflows/native/MiniMaxH3-Native-Ref2VA.json
+```
+
+生产卷中应删除增强专用文件和目录：
+
+```text
+models/diffusion_models/Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors
+models/LLM/
+models/ultralytics/
+models/sams/
+models/vae_approx/
+models/tensorrt/
+models/loras/h3_character_swap_pro4500_1000.safetensors
+models/loras/h3-realism-people-t2v-i2v-r2v.safetensors
+workflows/enhancers/
+```
+
+删除前先核对 native 六个模型文件存在且大小正确；不要删除 native 所需的 FL2VA、text encoder、
+两个 native LoRA 和两个 VAE。
+
+## 冷启动和费用
+
+RunPod worker 从启动到停止按秒计费。长期无人使用时：
+
+```powershell
+pwsh scripts/runpod-endpoint.ps1 pause
+```
+
+生成前恢复 `workers.max=1`。Network Volume 约 160GB，费用约 `$11.20/月`；Global Volume
+已经删除，不再产生其存储费用。
+
+## 验证
+
+先做 health：
+
+```bash
+curl -s -X POST "https://api.runpod.ai/v2/3w2llhe9btnsmn/runsync" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"action":"health"}}'
+```
+
+期望只出现 `workflow_sets.native`，并返回：
+
+```text
+volume_mounted=true
+workflows_dir=/runpod-volume/workflows
+```
+
+再通过 Generator 端测试 native 480p 和 768p。不要使用 `enhance=true`；该参数已被 native-only
+handler 明确拒绝。
+
+## 排障
+
+| 现象 | 处理 |
+| --- | --- |
+| 任务一直 IN_QUEUE | Network Volume 绑定 `US-MD-1`，检查该机房 GPU 容量 |
+| 找不到模型 | 检查 Network Volume 上 native 六个模型文件和 `extra_model_paths.yaml` |
+| 找不到模板 | 检查 `/runpod-volume/workflows/native` 两个 JSON |
+| `enhance=true` 被拒绝 | 预期行为；当前版本已移除增强节点 |
+| GPU 0% 且任务卡在 progress=40 | 取消任务，检查是否误用了旧增强模板或旧 worker 镜像 |
+
+## 接入 MyReels（Generator + Gateway）
+
+Gateway 侧**已经有** RunPod 通道，不需要新端点：
+
+```
+api_endpoints.id = b618713f-e907-477c-b831-9827c8b97f93
+  path   = /v2/**        description = Runpod自定义工作流
+  billing_config = {"billingType": "expression",
+                    "expression": "$exists($responseRaw.executionTime) and $exists($response.data.widget_repairs)
+                                   ? ($responseRaw.executionTime + ($exists($responseRaw.delayTime) ? $responseRaw.delayTime : 0)) / 1000 * 0.000761 * 7
+                                   : ($response.data.executionTime / 1000 * 0.00034 * 7)",
+                    "billingKeyExpression": "$response.id",
+                    "billingTriggerExpression": "$response.status = 'success'"}
+  enable_transform = 1，request_transform_config 里有按 runpodType 生成 {"input": {...}} 的 JSONata 规则
+凭据：runpod_api_key（已存在凭据服务里）
+```
+
+这个 `billing_config` 就是「实际计费」的来源（Gateway 把它塞进 `X-Gateway-Billing-Cost` 响应头，
+Generator 的 runpodWorker 读到后写进任务 `actualCost`）。几点说明：
+
+- 计费只在 status 轮询返回 `success`（即 RunPod `COMPLETED`）的那一次触发，key 用 RunPod job id 去重；
+- 单价 `0.000761 $/s × 7` = A100 80GB 的 serverless 价（按 3.49/h 的 Blackwell 跑会低估约 28%）；
+- 用 `widget_repairs` 这个只有本 worker 才会返回的字段区分服务：其它走同一通道的 runpod 工作流
+  行为完全不变（表达式仍算 0，和改动前一致）；
+- 为什么不用 `$response.data.executionTime`：Gateway 的 `responseTransformConfig` 只在
+  `$.output.video` 存在时才会把 executionTime 映射进 data，我们的响应是 `data.images[]`，
+  所以要用 `$responseRaw`（未转换的 RunPod 原始响应）+ `delayTime` 才拿得到真实的启动+执行时间。
+
+Generator 侧走一等公民链路：`TaskJobType.RUNPOD` → `workers/runpod/runpodWorker.ts`
+
+- `submitToAPI`：`POST {gateway_url}`，`:instance` 用 **ServiceConfig.model_desc** 替换
+- `buildRequestBody`：直接把任务的 `merged_prompt` 当请求体（所以 prompt 模板本身要产出 `{"input": {...}}` 形状，或由 Gateway 的 request transform 包一层）
+- `pollRunpod`：用同一 `gateway_url` 的 status 路径，`:instance` 同样替换
+- `extractResultAssets`：只认 `data.video_url` / `data.image_url` / `data.audio_url`，以及 `data.images[] = {data: <base64>, type: "base64", filename}`
+
+所以要让 H3 worker 接进去，需要三步：
+
+1. **worker 响应形状**（已在本仓库 `handler.py::_result_payload` 实现）：
+   除了原来的 `outputs/texts/widget_repairs`，再镜像出 `video_url` / `image_url` / `audio_url`
+   和 `images[].{data,type:'base64',filename}`，正好落在 Generator 读取的 `data.*` 上。
+2. **Generator 的 `service_config` 加一行**（`model_name` 是模型名，`model_desc` 填 RunPod endpoint id）：
+
+   | 列 | 值 |
+   | --- | --- |
+   | model_name | `myreels-minimax-h3`（自定义，id `43bc24f1-b62d-42e1-bbcc-32bbb3c17220`） |
+   | model_desc | RunPod endpoint id = `3w2llhe9btnsmn`（换端点只改这一列） |
+   | cost_price / estimated_price / estimated_generation_time / profit_margin | 见下表（按实测成本折算） |
+   | gateway_method / gateway_url | `POST` / `/p/runpod-api/v2/:instance/run` |
+   | response_handling | `{"mode": "auto"}` |
+   | is_active / access_tiers / is_api_enabled | `1` / `["normal"]` / `1` |
+
+   定价值是从实测反推的：A100 80GB 冷启动一次 5s/native 的真实成本约 ¥1.23（`actualCost` 会按
+   profit_margin 再放大成用户看到的数），估算价按"默认分辨率 768p + 冷启动"留了余量：
+
+   | 场景 | 实测 actualCost | 说明 |
+   | --- | --- | --- |
+   | 5s / 480p / native / 冷启动 | ¥1.3626（Gateway 原值 ¥1.2331） | processingTime 237s |
+   | 5s / 480p / native / 热跑 | —— | processingTime 170s，Gateway 原值 ¥0.861 |
+
+   参照现有行：`myreels-infinite-avatar | vuvb9fz9evmu1h | … | POST | /p/runpod-api/v2/:instance/run`。
+3. **`service_prompt_resources` 加一条该模型的 prompt 资源**，`base_config` 就是发给 worker 的 body，例如：
+
+   ```json
+   {"input": {"workflow": "MiniMaxH3-Native-Ref2VA.json", "template_set": "native",
+              "prompt": "{{prompt}}", "config": "native_turbo", "seconds": "{{seconds}}",
+              "images": "{{images}}", "audios": "{{audios}}", "model": "myreels-minimax-h3"}}
+   ```
+
+   同时在 `myreels-config/model_manifest/by_gateway/` 里补一行
+   `<模型名> | /p/runpod-api/v2/:instance/run`（现有文件 `28_p_runpod-api_v2_instance_run.txt`）。
+
+以上 2、3 两步要写 Generator 的 MySQL（`myreels-config` 只是快照，改了不会自动生效），
+需要对应的库访问权限或由你在管理端导入。
+
+## GitHub Endpoint 与 RunPod Hub
+
+生产部署不需要上架 Hub，也不需要 GitHub Release。私有 Endpoint 直接关联仓库的 `main` 分支，
+RunPod 根据 `/.runpod/Dockerfile` 构建内部镜像即可。
+
+`.runpod/hub.json` 和 `.runpod/tests.json` 只在以后选择上架 Hub 时使用；它们不是私有 GitHub
+Endpoint 的必要条件。即使上架 Hub，Hub 也应使用这份完整 Dockerfile，不需要 Docker Hub 镜像。
+
+`.runpod/tests.json` 当前只跑 `{"action":"health"}`，健康检查不依赖模型卷、不下载模型。真实
+FL2VA / Ref2VA 仍应在新内部镜像构建成功后通过 Endpoint 单独验证。

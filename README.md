@@ -1,52 +1,75 @@
-# MiniMax H3 Native — ComfyUI RunPod Serverless
+# MiniMax H3 Native — ComfyUI RunPod Serverless Worker
 
-基于 ComfyUI 的 MiniMax H3 视频与音频生成服务，支持文本生成、首帧生成、首尾帧生成，
-以及参考图、参考视频和参考音频生成。通过 RunPod Serverless handler 接收任务并返回 MP4。
+这是一个只提供 **native FL2VA / Ref2VA** 的 ComfyUI RunPod Serverless worker。
+增强节点、增强工作流、QwenVL prompt enhancer、RIFE、TensorRT upscaler、face detailer
+和 wildcard 已从 Dockerfile、镜像和生产 Network Volume 清单中移除。
 
-## 运行环境
+## 当前部署
 
+- Endpoint：`3w2llhe9btnsmn`
+- GitHub：`beautyaiClub/runpod-comfyui-minimax-h3` / `main`
 - 基础镜像：`codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0`
-- CUDA 13.0、ComfyUI v0.40.0
-- 单张 A100 80GB 或 RTX PRO 6000 Blackwell 96GB
-- 模型与工作流随镜像提供，部署无需挂载模型卷
+- CUDA：13.0
+- ComfyUI：v0.40.0
+- 模型卷：Network Volume `icf8p97vyb`，`US-MD-1`，160GB，挂载 `/runpod-volume`
+- 当前支持模板：`MiniMaxH3-Native-FL2VA.json`、`MiniMaxH3-Native-Ref2VA.json`
 
-## 构建与部署
+Global Volume 已删除。生产只使用 Network Volume。
 
-RunPod GitHub 集成使用 `main` 分支和 `/.runpod/Dockerfile`，构建上下文为仓库根目录。
-构建期间下载 6 个模型，按 `models-lock.json` 中的固定版本、文件大小及 SHA256 校验，
-模型总大小为 46,378,958,507 字节，约 46.38GB。
+## 构建
+
+根 `Dockerfile` 和 `/.runpod/Dockerfile` 都以现有 CUDA 13.0 运行时镜像为基础，
+只复制 native handler、native URL loaders 和 native 模板，并删除基础镜像中继承的增强节点：
 
 ```dockerfile
 FROM codoive/runpod-minimax-h3:cu130-comfyui-v0.40.0
 ```
 
-根 `Dockerfile` 与 `.runpod/Dockerfile` 内容相同，可在本地复现构建：
+生产模型不放入镜像，模型从 Network Volume 读取。RunPod GitHub builder 只需要构建代码层，
+不需要在构建阶段下载 77GB 模型，也不再尝试导出 90GB 镜像。
+
+本地代码检查：
 
 ```powershell
 wslc build --progress plain --tag runpod-comfyui-minimax-h3:native .
 ```
 
-Worker 直接读取 `/opt/comfyui-baked/models` 中的模型和 `/opt/workflows/native` 中的模板。
-容器盘用于输入、输出和运行缓存。Serverless 可设置 `workers.min=0`、`workers.max=1`、
-`idleTimeout=5`，任务完成后按空闲超时缩容。
+## Native 模型清单
 
-## 输入方式
+`models-manifest.txt` 只包含 native 模板实际引用的 6 个文件：
 
-| 输入 | 参数 | 模板 |
-| --- | --- | --- |
-| 文本生成 | `prompt` | `MiniMaxH3-Native-FL2VA.json` |
-| 首帧生成 | `image1` | `MiniMaxH3-Native-FL2VA.json` |
-| 首尾帧生成 | `image1`、`image2` | `MiniMaxH3-Native-FL2VA.json` |
-| 参考素材生成 | `images`、`videos`、`audios` | `MiniMaxH3-Native-Ref2VA.json` |
+```text
+models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+models/text_encoders/qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors
+models/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors
+models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors
+models/vae/minimax_h3_video_vae_fp16.safetensors
+models/vae/minimax_h3_audio_vae_fp32.safetensors
+```
 
-`workflow="auto"` 按输入自动选择模板。首尾帧输入与参考素材输入互斥。
-参考通道最多支持 9 张图、3 段视频、3 段音频，素材使用可直接访问的 HTTP(S) URL。
+以下内容已从生产 Network Volume 清理目标中排除：
+
+- Singularity ref2va 模型
+- QwenVL / GGUF 模型
+- face detector / SAM
+- character-swap / realism LoRA
+- TAE preview VAE
+- TensorRT RIFE / upscaler engine
+
+## 请求格式
+
+不再支持 `enhance=true`、`template_set=enhancers` 或增强工作流。提交这些参数会直接返回
+明确错误，不会启动一个空闲 GPU worker。
+
+### FL2VA / T2VA
 
 ```json
 {
   "input": {
-    "workflow": "auto",
-    "prompt": "A golden retriever rests on a sunlit wooden floor, static camera",
+    "workflow": "MiniMaxH3-Native-FL2VA.json",
+    "template_set": "native",
+    "prompt": "[STATIC SHOT] a golden retriever puppy sleeping on a sunlit wooden floor",
+    "config": "native_turbo",
     "seconds": 5,
     "resolution": "480p",
     "aspect_ratio": "16:9"
@@ -54,80 +77,47 @@ Worker 直接读取 `/opt/comfyui-baked/models` 中的模型和 `/opt/workflows/
 }
 ```
 
-首尾帧示例：
+### Ref2VA
 
 ```json
 {
   "input": {
-    "workflow": "auto",
-    "prompt": "A slow, continuous camera move between the two views",
-    "image1": "https://example.com/first.png",
-    "image2": "https://example.com/last.png",
+    "workflow": "MiniMaxH3-Native-Ref2VA.json",
+    "template_set": "native",
+    "prompt": "a person walking through a neon street",
+    "config": "native_turbo",
     "seconds": 5,
-    "resolution": "768p",
-    "aspect_ratio": "16:9"
-  }
-}
-```
-
-参考素材示例：
-
-```json
-{
-  "input": {
-    "workflow": "auto",
-    "prompt": "Keep the subject and motion consistent with the references",
     "images": ["https://example.com/reference.png"],
     "videos": ["https://example.com/reference.mp4"],
-    "seconds": 5,
-    "resolution": "480p",
-    "aspect_ratio": "16:9"
+    "audios": ["https://example.com/reference.mp3"]
   }
 }
 ```
 
-## 参数
+## Network Volume 目录
 
-| 参数 | 说明 |
-| --- | --- |
-| `prompt` | 画面、动作、运镜和声音描述 |
-| `workflow` | `auto` 或具体模板名 |
-| `template_set` | `native` |
-| `seconds` | 输出目标时长；帧数按 H3 支持的网格对齐 |
-| `resolution` | `352p`、`480p`、`576p`、`768p`；`720p` 为 `768p` 档别名 |
-| `aspect_ratio` | `16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`21:9` |
-| `config` | `native_turbo`（默认）或 `native` |
-| `params` | 按节点 ID 与 widget 名覆盖参数 |
+```text
+/runpod-volume/models/...
+/runpod-volume/workflows/native/MiniMaxH3-Native-FL2VA.json
+/runpod-volume/workflows/native/MiniMaxH3-Native-Ref2VA.json
+```
 
-尺寸按 32 像素对齐；16:9 的 480p 档输出为 832×480，高分辨率档输出为 1344×768。
-返回的时长和尺寸以视频实际元数据为准。
-
-## 模型
-
-| 文件 | 用途 |
-| --- | --- |
-| `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | H3 INT8 主模型 |
-| `qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors` | 文本编码器 |
-| `minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` | FL2VA Turbo LoRA |
-| `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | Ref2VA Turbo LoRA |
-| `minimax_h3_video_vae_fp16.safetensors` | 视频 VAE |
-| `minimax_h3_audio_vae_fp32.safetensors` | 音频 VAE |
-
-## 输出与健康检查
-
-返回 `outputs`、`images`、`texts` 和 `widget_repairs`。小产物以 base64 回传；
-大产物可通过请求中的 `s3Config` 写入对象存储并返回 URL。
-
-`{"input":{"action":"health"}}` 返回 ComfyUI 启动状态、模板清单、模型目录、
-模型文件大小与 `model_source=image`。
+启动时只 seed `native` 模板，不会创建或复制 `enhancers` 目录。
+`VOLUME_AUTOPOPULATE=false` 时 worker 不下载模型；模型由预灌卷提供。
 
 ## 环境变量
 
-| 变量 | 默认 | 说明 |
+| 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `COMFYUI_DIR` | `/opt/comfyui-baked` | ComfyUI 目录 |
-| `WORKFLOWS_DIR` | `/opt/workflows` | 模板根目录 |
-| `H3_TEMPLATE_SET` | `native` | 模板集 |
-| `H3_MODEL_SOURCE` | `image` | 模型来源 |
-| `JOB_TIMEOUT_S` | `1800` | 单任务等待超时 |
+| `H3_TEMPLATE_SET` | `native` | 固定使用 native 模板集 |
+| `WORKFLOW_SEED` | `true` | 首次启动把 native 模板写入卷 |
+| `VOLUME_AUTOPOPULATE` | `false` | 是否启动时下载 native 模型 |
+| `JOB_TIMEOUT_S` | `1800` | 单任务超时 |
 | `COMFYUI_EXTRA_ARGS` | 空 | ComfyUI 额外启动参数 |
+
+## 已验证
+
+Network Volume 回切后 native Generator 480p 已完成，输出为约 5 秒 MP4。
+增强节点测试已取消，因为增强节点已从项目中移除。
+
+长时间无人使用时保持 `workers.max=0`；提交任务前设置 `workers.max=1`，避免空闲计费。

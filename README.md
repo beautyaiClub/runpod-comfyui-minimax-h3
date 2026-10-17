@@ -2,8 +2,8 @@
 
 把 ComfyUI + MiniMax H3（FL2VA / Ref2VA，带音频）打包成 RunPod Serverless 端点：
 每个 worker 启动一次 ComfyUI，handler 按 job 取模板、填参数、注入素材、投递到本地
-ComfyUI，再把产物回传。模型在 RunPod 构建阶段直接打包进镜像，生产端点不需要
-Global Volume、Network Volume，也不需要 worker 首次启动时下载模型。
+ComfyUI，再把产物回传。生产端点使用 Network Volume 保存模型和模板，worker 启动时
+直接挂载，不在 GPU worker 内下载模型。
 
 镜像基座：`ubuntu:24.04` + CUDA 13.0 + `torch==2.10.0+cu130`，ComfyUI 固定
 `v0.40.0`（都在 Dockerfile 顶部的 ARG 里，改一处即可）。
@@ -14,8 +14,8 @@ Global Volume、Network Volume，也不需要 worker 首次启动时下载模型
 | --- | --- |
 | `Dockerfile` | 两阶段构建：builder 装 ComfyUI + 节点 + Python 依赖，runtime 只带运行时 |
 | `handler.py` | RunPod handler：模板选择、参数注入、素材注入、widget 校正、产物回传 |
-| `serverless-entrypoint.sh` | 开机流程：选择镜像内模型、兼容旧卷挂载、启动 handler |
-| `populate-volume.sh` + `models-manifest.txt` | 模型清单；Dockerfile 构建时按清单下载，脚本仅保留给旧卷部署 |
+| `serverless-entrypoint.sh` | 开机流程：材料化 ComfyUI、配置 Network Volume 模型路径、seed 模板、启动 handler |
+| `populate-volume.sh` + `models-manifest.txt` | Network Volume 模型清单与幂等下载；生产端点关闭自动下载 |
 | `workflows-api/native/` | 原生模板集（核心节点 + 三个 URL loader） |
 | `workflows-api/enhancers/` | 增强模板集（提示词增强、RIFE 插帧、TensorRT 超分、face detailer、wildcard） |
 | `custom_nodes/h3_url_loaders/` | 自带的两个 URL loader（从上游 vendor，见该目录 README） |
@@ -25,13 +25,8 @@ Global Volume、Network Volume，也不需要 worker 首次启动时下载模型
 ## 构建
 
 ```bash
-# RunPod GitHub builder 使用的同一套 Dockerfile；模型会在构建阶段下载并进入镜像。
-# 本地执行会下载约 77.6GB 模型，仅用于需要本地复现时。
-wslc build --progress plain --build-arg BAKE_MODELS=true .
-
-# 代码自检镜像（不下载模型，不用于生产部署）
-wslc build --progress plain --build-arg BAKE_MODELS=false \
-  --tag runpod-comfyui-minimax-h3:code-only .
+# 代码/依赖镜像构建（不把 H3 模型放进生产镜像）
+wslc build --progress plain --build-arg BAKE_MODELS=false .
 ```
 
 常用构建参数（都在 Dockerfile 顶部）：
@@ -40,7 +35,7 @@ wslc build --progress plain --build-arg BAKE_MODELS=false \
 | --- | --- | --- |
 | `COMFYUI_VERSION` | `v0.40.0` | ComfyUI tag |
 | `WITH_H3_ENHANCERS` | `true` | 是否装增强层（TensorRT / Impact / Easy-Use / Pixaroma / QwenVL / TagForge / PerfectVideoResolution） |
-| `BAKE_MODELS` | `true` | 是否在 RunPod 构建阶段把 `models-manifest.txt` 中的模型下载到镜像 |
+| `BAKE_MODELS` | `true` | 仅用于需要模型内置镜像的实验构建；生产端点使用 Network Volume，建议关闭 |
 | `TORCH_VERSION` / `TORCHVISION_VERSION` / `TORCHAUDIO_VERSION` | `2.10.0+cu130` / `0.25.0+cu130` / `2.10.0+cu130` | CUDA 13 的 PyTorch |
 | `CUDA_VERSION_DASH` / `TORCH_INDEX_SUFFIX` | `13-0` / `cu130` | CUDA 工具链与 PyTorch 源 |
 | `TRT_CU13_VERSION` | `10.15.1.29` | TensorRT 版本，需与卷里预编译引擎一致 |
@@ -51,20 +46,20 @@ wheel 全下下来算哈希，几十 GB）；装完校验 torch 版本，再装�
 ## 部署
 
 1. RunPod Endpoint 关联本仓库的 GitHub 构建，Dockerfile 使用 `/.runpod/Dockerfile`。
-2. RunPod builder 在构建阶段下载 `models-manifest.txt` 中的模型并保存构建产物，生产 worker 不再下载模型。
-3. 不挂 Global Volume 或 Network Volume；容器盘保留 30GB 作为运行期临时空间即可，模型位于镜像层。
-4. GPU：允许 `AMPERE_80` 和 `BLACKWELL_96`，单卡；两档均需通过实际任务验证。
-5. `workers.max=0` 时没有任务 worker，不产生 GPU worker 运行费用；镜像构建和缓存由 RunPod 管理。
+2. 生产使用 Network Volume `icf8p97vyb`（160GB，`US-MD-1`），挂载到 `/runpod-volume`。
+3. 模型不放进生产镜像，worker 不在计费期间下载模型；容器盘保留 30GB 作为运行期临时空间。
+4. GPU：允许 `AMPERE_80` 和 `BLACKWELL_96`，单卡；当前生产任务已在 A100 80GB 上验证。
+5. `workers.max=0` 时没有任务 worker，不产生 GPU worker 运行费用；当前暂停状态需要生成时再激活。
 
 ## 两套模板
 
-两套模板都直接放在镜像内。生产 worker 默认读取 `/opt/workflows`，不需要卷。
-修改模板后提交 GitHub 并触发 RunPod 重建即可。
+两套模板放在 Network Volume 上，生产 worker 从 `/runpod-volume/workflows` 读取。
+模板修改后替换卷上的文件并重启 worker，不需要重建含模型的大镜像。
 
 ```
-/opt/workflows/native/MiniMaxH3-Native-FL2VA.json     t2va / i2va / fl2va
-/opt/workflows/native/MiniMaxH3-Native-Ref2VA.json    ref2va
-/opt/workflows/enhancers/*.json                       5 个增强模板
+/runpod-volume/workflows/native/MiniMaxH3-Native-FL2VA.json     t2va / i2va / fl2va
+/runpod-volume/workflows/native/MiniMaxH3-Native-Ref2VA.json    ref2va
+/runpod-volume/workflows/enhancers/*.json                       5 个增强模板
 ```
 
 选哪套由参数决定：
@@ -120,8 +115,8 @@ t2va（不给图）/ i2va（1 张图）/ fl2va（首尾两帧），ref2va 模板
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
 | `H3_TEMPLATE_SET` | `native` | 默认模板集 |
-| `BAKED_MODELS` | `true` | 是否优先使用镜像内模型 |
-| `VOLUME_AUTOPOPULATE` | `false` | 仅旧卷兼容模式下是否下载缺失模型 |
+| `BAKED_MODELS` | `false` | 生产使用 Network Volume 模型，不使用镜像内模型 |
+| `VOLUME_AUTOPOPULATE` | `false` | 生产关闭自动下载，模型由预灌卷提供 |
 | `HF_TOKEN` | 空 | 从 Hugging Face 拉 gated 仓库时需要 |
 | `JOB_TIMEOUT_S` | `1800` | 单任务超时（秒） |
 | `COMFYUI_EXTRA_ARGS` | 空 | 传给 ComfyUI 的额外启动参数 |
@@ -133,13 +128,12 @@ t2va（不给图）/ i2va（1 张图）/ fl2va（首尾两帧），ref2va 模板
 
 ## 模型
 
-模型清单是 `models-manifest.txt`。RunPod 构建 `/.runpod/Dockerfile` 时，Dockerfile
-逐条下载清单中的 14 个文件到 `/opt/comfyui-baked/models`，下载完成后再复制到最终镜像。
-当前模型集合约 77.6GB，连同 ComfyUI、CUDA 和节点后最终镜像预计约 90～95GB。
+模型清单是 `models-manifest.txt`，共 14 个文件，实际约 77.55GB。生产文件位于
+`/runpod-volume/models`，ComfyUI 通过 `extra_model_paths.yaml` 使用这些文件。
 
 清单包含：Comfy-Org 的 H3 INT8 权重与 VAE、Singularity ref2va int8、Qwen3-VL 32B
-NVFP4 文本编码器、lightx2v turbo LoRA、风格 LoRA、face detailer 用的 bbox / sam 权重。
-生产环境不需要单独创建模型卷。`populate-volume.sh` 仅保留给旧的卷挂载部署，不参与默认镜像构建后的启动流程。
+NVFP4 文本编码器、Turbo LoRA、风格 LoRA、face detector、SAM 和增强器 GGUF。
+`populate-volume.sh` 用于预灌 Network Volume；生产 worker 设置 `VOLUME_AUTOPOPULATE=false`。
 
 ## 节点来源
 
@@ -183,6 +177,7 @@ wslc run --rm --entrypoint /usr/bin/python3 $IMG /opt/serverless/test-handler-te
 
 - 增强集的 RIFE / 超分节点首次运行会按当前 GPU 架构编译 TensorRT 引擎，可能需要几分钟；
   引擎不打包进镜像，也不跨 GPU 架构复用。
+- Global Volume 曾用于性能对比，但对象存储/FUSE 读取明显慢于 Network Volume；该卷已删除，不用于生产推理。
 - 模板导出时的 widget 会随节点版本漂移（例如 `crf` 被挪进 format 控件、`2K` vs `2k`）。
   handler 在投递前按运行中服务器的 schema 校正：只差大小写的值做归一，节点不认识的
   widget 丢弃走默认值，改动明细放在响应的 `widget_repairs` 里。

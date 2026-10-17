@@ -1,126 +1,117 @@
 # RunPod 部署备忘
 
-## 部署方式
+## 当前生产部署
 
-本项目使用 RunPod 的 GitHub 集成构建，不依赖 Docker Hub：
-
-| 配置 | 值 |
+| 项目 | 当前值 |
 | --- | --- |
-| GitHub 仓库 | `beautyaiClub/runpod-comfyui-minimax-h3` |
-| 分支 | `main` |
-| Dockerfile | `/.runpod/Dockerfile` |
-| 构建方式 | RunPod builder 在 Dockerfile 构建阶段下载并打包模型 |
-| 模型卷 | 不需要 Global Volume 或 Network Volume |
-| 模型清单 | `models-manifest.txt`，14 个文件，约 77.6GB |
-| 运行镜像 | RunPod 内部构建产物，不推送 Docker Hub |
+| Endpoint | `3w2llhe9btnsmn` / `myreels-minimax-h3` |
+| GitHub | `beautyaiClub/runpod-comfyui-minimax-h3`，分支 `main` |
+| 当前生产镜像 | RunPod 内部构建镜像 `b71517eaa` |
+| 模型卷 | Network Volume `icf8p97vyb` / `myreels-h3-models` |
+| 机房 | `US-MD-1` |
+| 卷大小 | 160GB |
+| 挂载路径 | `/runpod-volume` |
+| GPU 池 | `AMPERE_80`、`BLACKWELL_96` |
+| Worker | `min=0`、`max=1`、`idleTimeout=5` |
 
-`.runpod/Dockerfile` 是完整 Dockerfile，不是 `FROM codoive/...` 的镜像包装层。
-它使用 `ubuntu:24.04`、CUDA 13.0、ComfyUI v0.40.0 和 CUDA 13.0 PyTorch，
-并在 `BAKE_MODELS=true` 时把模型下载到 `/opt/comfyui-baked/models`。
+当前 Endpoint 已通过 API 切回 Network Volume：
 
-## 构建流程
-
-1. 将 Dockerfile 和代码提交到 GitHub `main`。
-2. RunPod GitHub builder 检测新的 commit。
-3. Builder 安装 ComfyUI、节点和 Python 依赖。
-4. Builder 按 `models-manifest.txt` 下载 14 个模型文件。
-5. RunPod 保存构建产物，Endpoint 使用该内部镜像。
-6. Worker 启动时直接从镜像读取模型，不执行模型下载。
-
-模型构建失败时，不要把不完整的 `.part` 文件当成完成文件。Dockerfile 只在下载成功
-后才将 `.part` 重命名为最终文件。
-
-## Endpoint 目标配置
-
-- `workers.min = 0`
-- `workers.max = 1`
-- `idleTimeout = 5`
-- `executionTimeout = 3600s`
-- GPU 池：`AMPERE_80`、`BLACKWELL_96`
-- CUDA：`13.0`
-- 容器盘：30GB 运行期临时空间
-- 不配置 `networkVolumeIds`
-- 不配置 `volumes`
-
-模型已经在镜像层内，不能再让启动脚本把 77GB 模型复制到 `/workspace`，否则会产生一次
-不必要的冷启动复制。`serverless-entrypoint.sh` 检测到 `BAKED_MODELS=true` 后直接使用
-`/opt/comfyui-baked`；只有代码自检镜像或旧卷部署才会走复制兼容路径。
-
-## 成本口径
-
-- 没有 Global Volume 的固定存储费。
-- 没有 Network Volume 的固定存储费。
-- RunPod 构建产物和缓存由 RunPod 管理，不是 Docker Hub 存储。
-- Worker 从启动到停止按秒计费，包括冷启动、任务执行和 `idleTimeout` 等待时间。
-- `workers.max=0` 时没有 Worker 运行，不产生 GPU Worker 运行费用。
-- 大镜像会增加首次冷启动准备时间，但 RunPod 会在 scaled-down 阶段准备镜像，准备阶段不等于
-  Worker 正在执行任务。
-
-## 两套模板
-
-模板直接放在镜像中：
-
-```
-/opt/workflows/native/MiniMaxH3-Native-FL2VA.json
-/opt/workflows/native/MiniMaxH3-Native-Ref2VA.json
-/opt/workflows/enhancers/*.json
+```json
+{
+  "mounts": {
+    "global": [],
+    "network": [{"volumeId": "icf8p97vyb"}]
+  }
+}
 ```
 
-通过 `template_set` 或端点默认环境变量 `H3_TEMPLATE_SET` 选择：
+Global Volume 已删除，不再产生 Global Volume 存储费用；生产只保留 Network Volume。
 
-- `native`：原生 FL2VA / Ref2VA，不启用增强节点；
-- `enhancers`：启用提示词增强、RIFE、TensorRT 超分和 face detailer。
+## 为什么不用 Global Volume 生产推理
 
-修改模板需要提交 GitHub 并触发一次新的 RunPod 构建。旧的卷模板 seed 逻辑只为兼容旧卷保留，
-新的 image-only Endpoint 不需要它。
+Global Volume 的模型文件总大小约 77.55GB，功能验证通过，但性能不合格：
 
-## 模型
+| 方案 | GPU | 480p / 5s | 768p / 5s |
+| --- | --- | ---: | ---: |
+| Network Volume 历史实测 | A100 80GB | execution 约 131～145秒 | 约 2～4分钟量级 |
+| Global Volume 本轮实测 | RTX PRO 6000 Blackwell | 1,283.9秒，约21.4分钟 | 1,199.2秒，约20.0分钟 |
+| Network Volume 回切后实测 | A100 80GB | 144.4秒，约2.4分钟 | — |
 
-`models-manifest.txt` 是唯一模型清单。Dockerfile 构建时将文件下载到：
+Global 的 480p 和 768p 执行时间几乎一样，说明瓶颈不是分辨率，而是模型在对象存储
+FUSE 路径上的加载/随机读取。Global Volume 适合跨机房共享模型或数据集，不适合 ComfyUI
+这类需要频繁随机读取大型 safetensors 的推理服务。
 
+## 卷内容
+
+```text
+/runpod-volume/models/...            14 个 H3 模型文件，约 77.55GB
+/runpod-volume/workflows/native/     MiniMaxH3-Native-FL2VA.json / -Ref2VA.json
+/runpod-volume/workflows/enhancers/  5 个增强模板
 ```
-/opt/comfyui-baked/models/
+
+生产环境变量：
+
+```text
+H3_TEMPLATE_SET=native
+WORKFLOW_SEED=true
+VOLUME_AUTOPOPULATE=false
+JOB_TIMEOUT_S=1800
 ```
 
-当前模型包括 H3 INT8 diffusion models、Singularity ref2va、Qwen3-VL NVFP4 text encoder、
-Turbo LoRA、风格 LoRA、face detector、SAM、VAE 和 QwenVL enhancer 的 GGUF 文件。
-TensorRT 引擎不打包，增强节点首次使用时在 Worker 本地编译；引擎与 GPU 架构相关，不能跨
-不同 GPU 池直接复用。
+模型和模板已经预灌到 Network Volume，worker 不应在 GPU 计费期间下载模型。
 
-## 探活和真实任务
+## 成本
+
+```text
+Network Volume：160GB × $0.07/GB/月 ≈ $11.20/月
+Container disk：30GB，另计
+```
+
+Network Volume 是当前唯一的生产模型卷。`workers.max=0` 时没有运行中的 worker，不产生 GPU
+worker 运行费用；当前 Endpoint 已暂停，提交 Generator 任务前需要将 `max` 恢复为 1。
+
+## 健康检查与真实任务
 
 ```bash
-curl -s -X POST "https://api.runpod.ai/v2/<endpointId>/runsync" \
+curl -s -X POST "https://api.runpod.ai/v2/3w2llhe9btnsmn/runsync" \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"input":{"action":"health"}}'
 ```
 
-健康检查应返回 `status=ok`，并显示 `/opt/workflows`。它不需要模型卷，也不执行模型下载。
+健康检查应返回：
 
-真实任务使用 `/run`，长任务轮询 `/status/<jobId>`。小文件由 handler 直接返回，大文件按请求
-中的 `s3Config` 走 S3 预签名 URL。
+```json
+{
+  "status": "ok",
+  "volume_mounted": true,
+  "workflows_dir": "/runpod-volume/workflows"
+}
+```
+
+本轮 Network Volume 回切后的 health 已成功，随后 480p native FL2VA 也成功：
+
+```text
+status=COMPLETED
+executionTime=144366ms
+workerId=wxp8dw28xez05o
+```
 
 ## 排障
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| Build 长时间不动 | 正在下载约 77.6GB 模型或解析 Python 依赖；看 RunPod builder 的 plain 日志，不要中断构建 |
-| Worker 反复重启 | 检查 Dockerfile 最后对 shell 脚本做的 CRLF 清理和 shebang 断言 |
-| Worker 启动很慢 | 首次需要准备约 90～95GB 的内部镜像；不要再在 entrypoint 中下载或复制模型 |
-| 任务找不到模型 | 检查镜像构建是否包含 14 个模型文件，以及 `BAKED_MODELS=true` 是否生效 |
-| 任务一直 IN_QUEUE | 当前 GPU 池没有容量；切换允许的 GPU 池，不要通过模型卷解决 |
-| 增强节点失败 | 检查 TensorRT 版本、GPU 架构和节点版本是否匹配；native 模板先单独验证 |
+| 任务一直 IN_QUEUE | `US-MD-1` 的 GPU 没有容量；Network Volume 与机房绑定，不能随意换机房 |
+| worker 启动但找不到模板 | 检查 `/runpod-volume/workflows/native` 和 `/runpod-volume/workflows/enhancers` |
+| worker 启动但找不到模型 | 检查 `VOLUME_AUTOPOPULATE=false` 时卷是否已经完整预灌 |
+| 模型读取很慢 | 不要重新使用 Global Volume；H3 safetensors 生产读取使用 Network Volume |
+| 冷启动时间较长 | 模型加载在 worker 启动/首次任务期间发生；不要把模型下载放进 GPU worker |
 
-## 回退方案
+## 卷清理状态
 
-新镜像通过 `health`、native FL2VA 和 native Ref2VA 验证前，不删除原来的 Global Volume。
-验证成功后再按顺序执行：
-
-1. Endpoint 切换为新的 RunPod GitHub 构建产物；
-2. 清空 `volumes` 和 `networkVolumeIds`；
-3. 确认新 Worker 在没有卷的情况下完成健康检查和真实任务；
-4. 再删除旧 Global Volume，停止固定存储费用。
+- Network Volume `icf8p97vyb` 当前正在使用，不能删除。
+- Global Volume 已删除；当前没有 Global Volume 回退副本。
+- 删除 Network Volume 前必须先创建并完整验证新的模型存储方案。
 
 ## 接入 MyReels（Generator + Gateway）
 

@@ -25,6 +25,7 @@ RUN set -eux; \
 
 # Native H3 loaders and serverless code.
 COPY custom_nodes/h3_url_loaders/ /opt/comfyui-baked/custom_nodes/h3_url_loaders/
+COPY runpod-gpu-pricing.json /opt/serverless/runpod-gpu-pricing.json
 COPY handler.py /opt/serverless/handler.py
 COPY serverless-entrypoint.sh /opt/serverless/entrypoint.sh
 COPY populate-volume.sh /opt/serverless/populate-volume.sh

@@ -42,6 +42,40 @@ import runpod
 
 COMFY_DIR = os.environ.get("COMFYUI_DIR", "/workspace/runpod-slim/ComfyUI")
 COMFY_URL = "http://127.0.0.1:8188"
+
+
+def _runtime_gpu_info():
+    """Detect the actual worker GPU and attach the current RunPod catalog rate."""
+    gpu_id = "unknown"
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits"],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        gpu_id = next((line.strip() for line in proc.stdout.splitlines() if line.strip()), "unknown")
+    except Exception as exc:
+        print(f"[handler] GPU detection unavailable: {exc}", flush=True)
+    price = None
+    price_file = Path("/opt/serverless/runpod-gpu-pricing.json")
+    try:
+        pricing = json.loads(price_file.read_text())
+        for entry in pricing.get("entries", []):
+            if entry.get("gpu_type_id") == gpu_id:
+                price = float(entry["serverless_usd_per_hour"])
+                break
+    except Exception as exc:
+        print(f"[handler] GPU price catalog unavailable: {exc}", flush=True)
+    info = {
+        "gpu_type_id": gpu_id,
+        "gpu_serverless_price_usd_per_hour": price,
+        "gpu_price_source": "runpod:/v2/catalog/gpus" if price is not None else None,
+        "gpu_price_catalog_retrieved_at": pricing.get("retrieved_at") if price is not None else None,
+    }
+    print(f"[handler] runtime GPU: {info}", flush=True)
+    return info
+
+
+GPU_INFO = _runtime_gpu_info()
 WORKFLOWS_DIR = Path(os.environ.get("WORKFLOWS_DIR", "/opt/workflows"))
 TEMPLATE_SETS = ("native",)
 DEFAULT_TEMPLATE_SET = os.environ.get("H3_TEMPLATE_SET", "native").strip().lower() or "native"
@@ -906,7 +940,7 @@ def _result_payload(outputs, texts, repairs):
     so the same files are mirrored into those keys as well. `outputs` stays the
     canonical, richer form (it also carries texts and widget repairs).
     """
-    payload = {"outputs": outputs, "texts": texts, "widget_repairs": repairs}
+    payload = {"outputs": outputs, "texts": texts, "widget_repairs": repairs, **GPU_INFO}
     media = []
     for item in outputs:
         name = str(item.get("filename") or "")

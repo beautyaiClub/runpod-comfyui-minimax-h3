@@ -1,0 +1,153 @@
+{
+  "source": "RunPod /v2/catalog/gpus",
+  "retrieved_at": "2026-10-17",
+  "currency": "USD",
+  "unit": "per_gpu_hour",
+  "entries": [
+    {
+      "gpu_type_id": "NVIDIA A100 80GB PCIe",
+      "display_name": "A100 PCIe",
+      "serverless_usd_per_hour": 2.72
+    },
+    {
+      "gpu_type_id": "NVIDIA A100-SXM4-80GB",
+      "display_name": "A100 SXM",
+      "serverless_usd_per_hour": 2.72
+    },
+    {
+      "gpu_type_id": "NVIDIA A40",
+      "display_name": "A40",
+      "serverless_usd_per_hour": 1.22
+    },
+    {
+      "gpu_type_id": "NVIDIA B200",
+      "display_name": "B200",
+      "serverless_usd_per_hour": 8.64
+    },
+    {
+      "gpu_type_id": "NVIDIA B300 SXM6 AC",
+      "display_name": "B300",
+      "serverless_usd_per_hour": 10.65
+    },
+    {
+      "gpu_type_id": "NVIDIA B300 SXM6 AC MIG 1g.34gb",
+      "display_name": "B300 MIG 34GB",
+      "serverless_usd_per_hour": 1.15
+    },
+    {
+      "gpu_type_id": "NVIDIA GeForce RTX 3090",
+      "display_name": "RTX 3090",
+      "serverless_usd_per_hour": 0.69
+    },
+    {
+      "gpu_type_id": "NVIDIA GeForce RTX 4090",
+      "display_name": "RTX 4090",
+      "serverless_usd_per_hour": 1.1
+    },
+    {
+      "gpu_type_id": "NVIDIA GeForce RTX 5090",
+      "display_name": "RTX 5090",
+      "serverless_usd_per_hour": 1.58
+    },
+    {
+      "gpu_type_id": "NVIDIA H100 80GB HBM3",
+      "display_name": "H100 SXM",
+      "serverless_usd_per_hour": 4.79
+    },
+    {
+      "gpu_type_id": "NVIDIA H100 NVL",
+      "display_name": "H100 NVL",
+      "serverless_usd_per_hour": 4.79
+    },
+    {
+      "gpu_type_id": "NVIDIA H100 PCIe",
+      "display_name": "H100 PCIe",
+      "serverless_usd_per_hour": 4.79
+    },
+    {
+      "gpu_type_id": "NVIDIA H200",
+      "display_name": "H200 SXM",
+      "serverless_usd_per_hour": 5.93
+    },
+    {
+      "gpu_type_id": "NVIDIA L4",
+      "display_name": "L4",
+      "serverless_usd_per_hour": 0.69
+    },
+    {
+      "gpu_type_id": "NVIDIA L40",
+      "display_name": "L40",
+      "serverless_usd_per_hour": 1.75
+    },
+    {
+      "gpu_type_id": "NVIDIA L40S",
+      "display_name": "L40S",
+      "serverless_usd_per_hour": 1.75
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX 2000 Ada Generation",
+      "display_name": "RTX 2000 Ada",
+      "serverless_usd_per_hour": 0.58
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX 4000 Ada Generation",
+      "display_name": "RTX 4000 Ada",
+      "serverless_usd_per_hour": 0.58
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX 6000 Ada Generation",
+      "display_name": "RTX 6000 Ada",
+      "serverless_usd_per_hour": 1.75
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX A4000",
+      "display_name": "RTX A4000",
+      "serverless_usd_per_hour": 0.58
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX A4500",
+      "display_name": "RTX A4500",
+      "serverless_usd_per_hour": 0.58
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX A5000",
+      "display_name": "RTX A5000",
+      "serverless_usd_per_hour": 0.69
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX A6000",
+      "display_name": "RTX A6000",
+      "serverless_usd_per_hour": 1.22
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX PRO 4500 Blackwell",
+      "display_name": "RTX PRO 4500",
+      "serverless_usd_per_hour": 1.15
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "display_name": "RTX PRO 6000 MaxQ",
+      "serverless_usd_per_hour": 3.49
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "display_name": "RTX PRO 6000",
+      "serverless_usd_per_hour": 3.49
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb",
+      "display_name": "PRO 6000 MIG 24GB",
+      "serverless_usd_per_hour": 0.69
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 2g.48gb",
+      "display_name": "PRO 6000 MIG 48GB",
+      "serverless_usd_per_hour": 1.75
+    },
+    {
+      "gpu_type_id": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+      "display_name": "RTX PRO 6000 WK",
+      "serverless_usd_per_hour": 3.49
+    }
+  ]
+}

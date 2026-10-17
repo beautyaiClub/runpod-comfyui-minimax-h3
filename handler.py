@@ -334,10 +334,22 @@ def _patch(prompt, job):
     raw_images = _as_list(job.get("images"))
     if not raw_images:
         raw_images = _as_list(job.get("image1")) + _as_list(job.get("image2"))
-    images = [_upload(f"{base}_{i}.png", _media_bytes(v)) for i, v in enumerate(raw_images)]
+    # Native URL-loader nodes fetch HTTP(S) media themselves. Do not download
+    # those URLs a second time in the worker: private/signed Generator URLs can
+    # reject a worker-side urllib request even though ComfyUI's loader can read
+    # them. Only base64/local payloads need an upload fallback.
+    images = [
+        value if str(value).startswith(("http://", "https://", "data:"))
+        else _upload(f"{base}_{i}.png", _media_bytes(value))
+        for i, value in enumerate(raw_images)
+    ]
     raw_videos = _as_list(job.get("videos")) or (_as_list(job.get("video")) if job.get("video") else [])
     raw_audios = _as_list(job.get("audios"))
-    video_name = _upload(f"{base}.mp4", _media_bytes(raw_videos[0])) if raw_videos else None
+    video_name = (
+        _upload(f"{base}.mp4", _media_bytes(raw_videos[0]))
+        if raw_videos and not str(raw_videos[0]).startswith(("http://", "https://", "data:"))
+        else None
+    )
 
     def _remote(value, fallback):
         """URL loaders fetch the media themselves — only http(s)/data URLs fit."""

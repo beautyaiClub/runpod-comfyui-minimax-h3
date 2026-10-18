@@ -43,6 +43,22 @@ import runpod
 COMFY_DIR = os.environ.get("COMFYUI_DIR", "/workspace/runpod-slim/ComfyUI")
 COMFY_URL = "http://127.0.0.1:8188"
 
+PROCESS_START = time.monotonic()
+_LAST_JOB_END = None
+
+
+def _pre_job_seconds():
+    """Seconds billed before this job starts.
+
+    RunPod bills a worker from the moment it starts until it stops, so the only
+    time not covered by `executionTime` is what happens before the handler picks
+    up the job: the cold start for the first job, and the gap since the previous
+    job finished for every later one.
+    """
+    now = time.monotonic()
+    anchor = _LAST_JOB_END if _LAST_JOB_END is not None else PROCESS_START
+    return round(max(0.0, now - anchor), 3)
+
 
 def _runtime_gpu_info():
     """Detect the actual worker GPU and attach the current RunPod catalog rate."""
@@ -928,7 +944,7 @@ def _collect_outputs(history_entry, prompt, job, inline_used):
     return out, texts
 
 
-def _result_payload(outputs, texts, repairs):
+def _result_payload(outputs, texts, repairs, pre_job_s=0.0):
     """Add the response shape MyReels' generator expects on top of our own.
 
     RunPod wraps whatever the handler returns under `output`, and the generator's
@@ -940,7 +956,13 @@ def _result_payload(outputs, texts, repairs):
     so the same files are mirrored into those keys as well. `outputs` stays the
     canonical, richer form (it also carries texts and widget repairs).
     """
-    payload = {"outputs": outputs, "texts": texts, "widget_repairs": repairs, **GPU_INFO}
+    payload = {
+        "outputs": outputs,
+        "texts": texts,
+        "widget_repairs": repairs,
+        "worker_pre_job_seconds": pre_job_s,
+        **GPU_INFO,
+    }
     media = []
     for item in outputs:
         name = str(item.get("filename") or "")
@@ -959,7 +981,7 @@ def _result_payload(outputs, texts, repairs):
     return payload
 
 
-async def handler(job):
+async def _handler_impl(job, pre_job_s):
     print(f"[handler] job {job.get('id')} received", flush=True)
     inputs = job.get("input") or {}
     if inputs.get("action") == "native_cleanup":
@@ -1045,7 +1067,19 @@ async def handler(job):
         outputs = _collect_new_files(started, job, inline_used)
         print(f"[handler] fallback sweep — {len(outputs)} file(s) in output/", flush=True)
     print(f"[handler] done — {len(outputs)} output(s)", flush=True)
-    return _result_payload(outputs, texts, repairs)
+    return _result_payload(outputs, texts, repairs, pre_job_s)
+
+
+async def handler(job):
+    """Run one job and record when it ends, so the next job can be charged the
+    gap it actually kept the worker alive."""
+    global _LAST_JOB_END
+    pre_job_s = _pre_job_seconds()
+    print(f"[handler] worker pre-job time: {pre_job_s}s", flush=True)
+    try:
+        return await _handler_impl(job, pre_job_s)
+    finally:
+        _LAST_JOB_END = time.monotonic()
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@
     "runsOn": "GPU",
     "containerDiskInGb": 30,
     "gpuCount": 1,
-    "gpuIds": "AMPERE_80,BLACKWELL_96",
+    "gpuIds": "AMPERE_80",
     "allowedCudaVersions": [
       "13.0"
     ],

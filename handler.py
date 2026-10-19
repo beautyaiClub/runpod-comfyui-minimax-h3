@@ -852,7 +852,20 @@ async def _queue_and_wait(prompt):
 
 def _s3_cfg(job):
     cfg = job.get("s3Config") or (job.get("input") or {}).get("s3Config")
-    if isinstance(cfg, dict) and cfg.get("endpointUrl") and cfg.get("accessId"):
+    if not (isinstance(cfg, dict) and cfg.get("endpointUrl") and cfg.get("accessId")):
+        endpoint = os.environ.get("S3_ENDPOINT_URL")
+        access = os.environ.get("S3_ACCESS_ID")
+        secret = os.environ.get("S3_ACCESS_SECRET")
+        bucket = os.environ.get("S3_BUCKET")
+        if endpoint and access and secret and bucket:
+            cfg = {
+                "endpointUrl": endpoint,
+                "accessId": access,
+                "accessSecret": secret,
+                "bucketName": bucket,
+                "region": os.environ.get("S3_REGION", "auto"),
+            }
+    if isinstance(cfg, dict) and cfg.get("endpointUrl") and cfg.get("accessId") and cfg.get("bucketName"):
         return cfg
     return None
 
@@ -873,11 +886,11 @@ def _s3_client(cfg):
 
 
 def _emit_file(filename, data, job, inline_used):
-    """Small outputs inline as b64; large ones upload to the job's s3Config
-    storage (e.g. the RunPod network volume S3 API) and return a presigned URL."""
-    oversized = len(data) > INLINE_MAX or inline_used[0] + len(data) > INLINE_BUDGET
+    """Upload to S3/R2 when configured and return a URL; otherwise inline small
+    files as b64 and refuse oversized ones (RunPod drops oversized job results
+    with a 400 from the job-done callback)."""
     s3c = _s3_cfg(job)
-    if oversized and s3c:
+    if s3c:
         try:
             key = f"{S3_PREFIX}/{job.get('id', 'job')}/{filename}"
             client = _s3_client(s3c)
@@ -890,9 +903,13 @@ def _emit_file(filename, data, job, inline_used):
             print(f"[handler] {filename} -> s3://{s3c['bucketName']}/{key} ({len(data)/1e6:.1f}MB)", flush=True)
             return {"filename": filename, "url": url}
         except Exception as e:
-            print(f"[handler] s3 upload failed for {filename}: {e} — falling back to inline", flush=True)
-    elif oversized:
-        print(f"[handler] {filename}: {len(data)/1e6:.1f}MB over inline limit, no s3Config — result may be dropped by RunPod", flush=True)
+            raise RuntimeError(f"failed to upload {filename} to S3 storage: {e}") from e
+    oversized = len(data) > INLINE_MAX or inline_used[0] + len(data) > INLINE_BUDGET
+    if oversized:
+        raise RuntimeError(
+            f"{filename} is {len(data)/1e6:.1f}MB and no S3 storage is configured "
+            "(set S3_ENDPOINT_URL/S3_ACCESS_ID/S3_ACCESS_SECRET/S3_BUCKET)"
+        )
     inline_used[0] += len(data)
     return {"filename": filename, "b64": base64.b64encode(data).decode()}
 

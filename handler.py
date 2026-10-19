@@ -60,6 +60,27 @@ def _pre_job_seconds():
     return round(max(0.0, now - anchor), 3)
 
 
+def _mig_profile():
+    """Return the MIG slice profile (e.g. "2g.48gb") when the worker runs on MIG.
+
+    Inside a MIG instance `nvidia-smi --query-gpu=name` still reports the parent
+    card, so the catalog lookup would pick the full-GPU rate (e.g. $3.49/h)
+    instead of the slice rate (e.g. $1.75/h for 2g.48gb). `nvidia-smi -L` lists
+    the MIG device profile, which is what we need to match the catalog entry
+    "… MIG 2g.48gb".
+    """
+    try:
+        listing = subprocess.run(
+            ["nvidia-smi", "-L"],
+            check=True, capture_output=True, text=True, timeout=10,
+        ).stdout
+    except Exception as exc:
+        print(f"[handler] MIG detection unavailable: {exc}", flush=True)
+        return None
+    match = re.search(r"MIG\s+(\d+g\.\d+gb)", listing)
+    return match.group(1) if match else None
+
+
 def _runtime_gpu_info():
     """Detect the actual worker GPU and attach the current RunPod catalog rate."""
     gpu_id = "unknown"
@@ -71,6 +92,9 @@ def _runtime_gpu_info():
         gpu_id = next((line.strip() for line in proc.stdout.splitlines() if line.strip()), "unknown")
     except Exception as exc:
         print(f"[handler] GPU detection unavailable: {exc}", flush=True)
+    mig_profile = _mig_profile()
+    if mig_profile and gpu_id != "unknown":
+        gpu_id = f"{gpu_id} MIG {mig_profile}"
     price = None
     price_file = Path("/opt/serverless/runpod-gpu-pricing.json")
     try:
